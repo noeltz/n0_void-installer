@@ -330,10 +330,10 @@ configure_users() {
     log_info "Setting user password..."
     echo "$USERNAME:$USER_PASS" | chroot /mnt chpasswd -c SHA512
     
-    # CRITICAL FIX: Uncomment the wheel group in /etc/sudoers so the user can actually use sudo
+    # CRITICAL FIX: Uncomment the %#wheel group (not %wheel) in /etc/sudoers
+    # The %# syntax references the group by GID, which is the Void standard
     log_info "Enabling sudo access for the 'wheel' group..."
-    sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /mnt/etc/sudoers
-    sed -i 's/^# %#wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /mnt/etc/sudoers
+    sed -i 's/^#%#wheel ALL=(ALL) ALL/%#wheel ALL=(ALL) ALL/' /mnt/etc/sudoers
     
     log_info "Users configured. '$USERNAME' has been added to the 'wheel' group with sudo access."
 }
