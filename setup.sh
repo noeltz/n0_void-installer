@@ -1,5 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Step 2: Disk Selection & Partitioning
+# void-installer.sh - Step 2: Disk Selection & Partitioning (Fixed)
 
 set -e
 
@@ -124,10 +124,12 @@ partition_disk() {
 
     if [[ "$BOOT_MODE" == "efi" ]]; then
         log_step "Creating GPT partition table for EFI..."
-        parted -a optimal -s "$TARGET_DISK" mklabel gpt
-        parted -a optimal -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB
-        parted -s "$TARGET_DISK" set 1 esp on
-        parted -a optimal -s "$TARGET_DISK" mkpart primary ext4 513MiB 100%
+        # Using sfdisk which is included in util-linux (available on Void Live ISO)
+        sfdisk --wipe=always "$TARGET_DISK" <<EOF
+label: gpt
+size=512M, type=uefi
+type=linux
+EOF
         
         TARGET_EFI="${TARGET_DISK}${PART_PREFIX}1"
         TARGET_ROOT="${TARGET_DISK}${PART_PREFIX}2"
@@ -135,16 +137,17 @@ partition_disk() {
         log_info "Created Root Partition: $TARGET_ROOT"
     else
         log_step "Creating MBR partition table for BIOS..."
-        parted -a optimal -s "$TARGET_DISK" mklabel msdos
-        parted -a optimal -s "$TARGET_DISK" mkpart primary ext4 1MiB 100%
-        parted -s "$TARGET_DISK" set 1 boot on
+        sfdisk --wipe=always "$TARGET_DISK" <<EOF
+label: dos
+type=83, bootable
+EOF
         
         TARGET_ROOT="${TARGET_DISK}${PART_PREFIX}1"
         log_info "Created Bootable Root Partition: $TARGET_ROOT"
     fi
 
     # Update kernel partition table
-    partprobe "$TARGET_DISK"
+    partprobe "$TARGET_DISK" 2>/dev/null || true
     sleep 2 # Give the kernel a second to register the new partitions
     
     log_info "Partitioning successful! Current layout:"
