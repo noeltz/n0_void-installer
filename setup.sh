@@ -1,7 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Complete Guided Void Linux Installer
-# Implements: Pre-flight, Partitioning, Mounting, Base Install, 
-# Configuration, Bootloader, and Cleanup.
+# void-installer.sh - Complete Guided Void Linux Installer (Final Fixes)
 
 set -e
 
@@ -115,7 +113,6 @@ partition_disk() {
     log_step "Wiping existing signatures on $TARGET_DISK..."
     wipefs -a "$TARGET_DISK" > /dev/null
 
-    # Determine partition naming prefix (e.g., sda1 vs nvme0n1p1)
     if [[ "$TARGET_DISK" == *"nvme"* ]] || [[ "$TARGET_DISK" == *"mmcblk"* ]] || [[ "$TARGET_DISK" == *"loop"* ]]; then
         PART_PREFIX="p"
     else
@@ -181,7 +178,6 @@ mount_filesystems() {
 mount_virtual_filesystems() {
     log_step "Mounting virtual filesystems for chroot..."
     
-    # Create directories inside the newly formatted root first!
     mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run
     
     mount --rbind /dev /mnt/dev
@@ -221,15 +217,16 @@ install_base_system() {
     mkdir -p /mnt/var/db/xbps/keys
     cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
     
-    log_step "Syncing package databases and installing base-system & linux kernel..."
+    log_step "Syncing package databases and installing base-system, linux kernel, and kbd..."
     log_info "This will download and install the core system. It may take a few minutes."
     
-    if ! XBPS_ARCH="$FULL_ARCH" xbps-install -S -y -r /mnt -R "$REPO" base-system linux; then
+    # FIX: Explicitly install 'kbd' to ensure keymap utilities are present
+    if ! XBPS_ARCH="$FULL_ARCH" xbps-install -S -y -r /mnt -R "$REPO" base-system linux kbd; then
         log_error "Failed to install base system. Check your internet connection and try again."
         exit 1
     fi
     
-    log_info "Base system and kernel unpacked successfully!"
+    log_info "Base system, kernel, and kbd unpacked successfully!"
 }
 
 # ==========================================
@@ -237,12 +234,9 @@ install_base_system() {
 # ==========================================
 prepare_chroot() {
     log_step "Configuring DNS for chroot environment..."
-    # Copy resolv.conf so the chroot can resolve domain names (needed for GRUB download)
     cp -L /etc/resolv.conf /mnt/etc/resolv.conf
     
     log_step "Initializing base system configuration (creating /etc/shadow, etc.)..."
-    # CRITICAL: We must run reconfigure BEFORE creating users or setting keymaps, 
-    # otherwise /etc/shadow and kbd configurations won't exist yet!
     chroot /mnt xbps-reconfigure -fa > /dev/null
     log_info "Chroot prepared and base packages configured."
 }
@@ -286,9 +280,10 @@ configure_system_settings() {
     
     # Keyboard Layout (TTY: German - no dead keys)
     log_info "Setting TTY keyboard layout to German (no dead keys)..."
-    # Clean up any previous KEYMAP entries and add the correct one
+    # FIX: Clean up any previous KEYMAP entries
     grep -v '^KEYMAP=' /mnt/etc/rc.conf > /mnt/etc/rc.conf.tmp 2>/dev/null || true
-    echo 'KEYMAP="de-nodeadkeys"' >> /mnt/etc/rc.conf.tmp
+    # FIX: Add the new KEYMAP WITHOUT QUOTES, exactly as per Void Handbook documentation
+    echo 'KEYMAP=de-nodeadkeys' >> /mnt/etc/rc.conf.tmp
     mv /mnt/etc/rc.conf.tmp /mnt/etc/rc.conf
     
     log_info "System settings configured."
@@ -314,12 +309,16 @@ configure_users() {
         log_warn "Passwords do not match or are empty. Try again."
     done
     
-    # Execute user creation inside chroot safely
-    echo "root:$ROOT_PASS" | chroot /mnt chpasswd
+    # FIX: Use printf instead of echo to pipe passwords to chpasswd. 
+    # This prevents shell interpolation issues with special characters.
+    log_info "Setting root password..."
+    printf "%s:%s\n" "root" "$ROOT_PASS" | chroot /mnt chpasswd
     
+    log_info "Creating user '$USERNAME'..."
     chroot /mnt useradd -m -G wheel,audio,video,storage,network -s /bin/bash "$USERNAME"
     
-    echo "$USERNAME:$USER_PASS" | chroot /mnt chpasswd
+    log_info "Setting user password..."
+    printf "%s:%s\n" "$USERNAME" "$USER_PASS" | chroot /mnt chpasswd
     
     log_info "Users configured. '$USERNAME' has been added to the 'wheel' group for sudo access."
 }
@@ -336,7 +335,6 @@ enable_services() {
 install_bootloader() {
     log_step "Installing bootloader (GRUB)..."
 
-    # Mount efivarfs for UEFI systems (required to write boot entries)
     if [[ "$BOOT_MODE" == "efi" ]]; then
         mkdir -p /mnt/sys/firmware/efi/efivars
         mount -t efivarfs none /mnt/sys/firmware/efi/efivars 2>/dev/null || true
@@ -358,7 +356,6 @@ install_bootloader() {
             log_warn "Standard EFI install failed. Trying with --no-nvram..."
             chroot /mnt grub-install --target="$GRUB_TARGET" --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram --recheck
 
-            # Fallback: copy to removable/boot fallback path for non-compliant UEFI
             log_info "Installing fallback bootloader to /boot/efi/EFI/boot/..."
             chroot /mnt mkdir -p /boot/efi/EFI/boot
             case "$VOID_ARCH" in
@@ -368,7 +365,6 @@ install_bootloader() {
             esac
         fi
     else
-        # BIOS installation
         log_info "Installing grub for BIOS..."
         chroot /mnt xbps-install -S -y grub
 
@@ -376,7 +372,6 @@ install_bootloader() {
         chroot /mnt grub-install --target=i386-pc "$TARGET_DISK"
     fi
 
-    # Generate GRUB configuration
     log_info "Generating GRUB configuration..."
     chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -388,13 +383,11 @@ install_bootloader() {
 # ==========================================
 finalize_and_cleanup() {
     log_step "Finalizing installation (regenerating initramfs with all configs)..."
-    # Run reconfigure one last time to ensure dracut builds the initramfs with GRUB/LUKS configs
     chroot /mnt xbps-reconfigure -fa > /dev/null
     log_info "All packages configured. Initramfs generated."
 
     log_step "Cleaning up - unmounting filesystems..."
 
-    # Unmount in reverse order
     umount -l /mnt/sys/firmware/efi/efivars 2>/dev/null || true
     umount -l /mnt/run 2>/dev/null || true
     umount -l /mnt/sys 2>/dev/null || true
