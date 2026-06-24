@@ -1,5 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Step 2: Disk Selection & Partitioning (Fixed)
+# void-installer.sh - Step 3: Formatting & Mounting
 
 set -e
 
@@ -60,11 +60,9 @@ select_target_disk() {
     log_step "Detecting available physical disks..."
     echo "---------------------------------------------------"
     
-    # Arrays to hold disk data
     declare -a DISK_NAMES
     local i=1
     
-    # Read lsblk output safely (handles spaces in model names)
     while read -r name size model; do
         DISK_NAMES+=("$name")
         printf "  %d) %-10s %-8s %s\n" "$i" "$name" "$size" "$model"
@@ -115,7 +113,6 @@ partition_disk() {
     log_step "Wiping existing signatures on $TARGET_DISK..."
     wipefs -a "$TARGET_DISK" > /dev/null
 
-    # Determine partition naming prefix (e.g., sda1 vs nvme0n1p1)
     if [[ "$TARGET_DISK" == *"nvme"* ]] || [[ "$TARGET_DISK" == *"mmcblk"* ]] || [[ "$TARGET_DISK" == *"loop"* ]]; then
         PART_PREFIX="p"
     else
@@ -124,7 +121,6 @@ partition_disk() {
 
     if [[ "$BOOT_MODE" == "efi" ]]; then
         log_step "Creating GPT partition table for EFI..."
-        # Using sfdisk which is included in util-linux (available on Void Live ISO)
         sfdisk --wipe=always "$TARGET_DISK" <<EOF
 label: gpt
 size=512M, type=uefi
@@ -146,12 +142,62 @@ EOF
         log_info "Created Bootable Root Partition: $TARGET_ROOT"
     fi
 
-    # Update kernel partition table
     partprobe "$TARGET_DISK" 2>/dev/null || true
-    sleep 2 # Give the kernel a second to register the new partitions
+    sleep 2 
     
     log_info "Partitioning successful! Current layout:"
     lsblk "$TARGET_DISK"
+}
+
+# ==========================================
+# STEP 3: Formatting & Mounting
+# ==========================================
+format_filesystems() {
+    log_step "Formatting filesystems..."
+    
+    if [[ "$BOOT_MODE" == "efi" ]]; then
+        log_info "Formatting EFI partition ($TARGET_EFI) as FAT32..."
+        mkfs.vfat -F 32 "$TARGET_EFI" > /dev/null
+    fi
+    
+    log_info "Formatting Root partition ($TARGET_ROOT) as ext4..."
+    mkfs.ext4 -F "$TARGET_ROOT" > /dev/null
+    
+    log_info "Filesystems formatted successfully."
+}
+
+mount_filesystems() {
+    log_step "Mounting target filesystems to /mnt..."
+    
+    # Create mount point
+    mkdir -p /mnt
+    
+    # Mount root
+    mount "$TARGET_ROOT" /mnt
+    log_info "Mounted $TARGET_ROOT to /mnt"
+    
+    # Mount EFI if applicable
+    if [[ "$BOOT_MODE" == "efi" ]]; then
+        mkdir -p /mnt/boot/efi
+        mount "$TARGET_EFI" /mnt/boot/efi
+        log_info "Mounted $TARGET_EFI to /mnt/boot/efi"
+    fi
+}
+
+mount_virtual_filesystems() {
+    log_step "Mounting virtual filesystems for chroot..."
+    
+    mount --rbind /dev /mnt/dev
+    mount --make-rslave /mnt/dev
+    
+    mount -t proc /proc /mnt/proc
+    mount --rbind /sys /mnt/sys
+    mount --make-rslave /mnt/sys
+    
+    mount --rbind /run /mnt/run
+    mount --make-rslave /mnt/run
+    
+    log_info "Virtual filesystems mounted."
 }
 
 # ==========================================
@@ -176,9 +222,16 @@ main() {
     confirm_wipe
     partition_disk
     
+    # Step 3
+    echo ""
+    log_step "Starting Filesystem Formatting & Mounting..."
+    format_filesystems
+    mount_filesystems
+    mount_virtual_filesystems
+    
     echo ""
     echo "========================================="
-    log_info "Step 2 Completed Successfully!"
+    log_info "Step 3 Completed Successfully!"
     echo "========================================="
 }
 
