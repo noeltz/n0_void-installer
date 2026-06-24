@@ -1,5 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Step 3: Formatting & Mounting (Fixed)
+# void-installer.sh - Step 4: Base System Installation
 
 set -e
 
@@ -129,8 +129,6 @@ EOF
         
         TARGET_EFI="${TARGET_DISK}${PART_PREFIX}1"
         TARGET_ROOT="${TARGET_DISK}${PART_PREFIX}2"
-        log_info "Created EFI System Partition: $TARGET_EFI"
-        log_info "Created Root Partition: $TARGET_ROOT"
     else
         log_step "Creating MBR partition table for BIOS..."
         sfdisk --wipe=always "$TARGET_DISK" <<EOF
@@ -139,14 +137,10 @@ type=83, bootable
 EOF
         
         TARGET_ROOT="${TARGET_DISK}${PART_PREFIX}1"
-        log_info "Created Bootable Root Partition: $TARGET_ROOT"
     fi
 
     partprobe "$TARGET_DISK" 2>/dev/null || true
     sleep 2 
-    
-    log_info "Partitioning successful! Current layout:"
-    lsblk "$TARGET_DISK"
 }
 
 # ==========================================
@@ -156,51 +150,74 @@ format_filesystems() {
     log_step "Formatting filesystems..."
     
     if [[ "$BOOT_MODE" == "efi" ]]; then
-        log_info "Formatting EFI partition ($TARGET_EFI) as FAT32..."
         mkfs.vfat -F 32 "$TARGET_EFI" > /dev/null
     fi
-    
-    log_info "Formatting Root partition ($TARGET_ROOT) as ext4..."
     mkfs.ext4 -F "$TARGET_ROOT" > /dev/null
-    
-    log_info "Filesystems formatted successfully."
 }
 
 mount_filesystems() {
     log_step "Mounting target filesystems to /mnt..."
-    
-    # Create mount point
     mkdir -p /mnt
-    
-    # Mount root
     mount "$TARGET_ROOT" /mnt
-    log_info "Mounted $TARGET_ROOT to /mnt"
     
-    # Mount EFI if applicable
     if [[ "$BOOT_MODE" == "efi" ]]; then
         mkdir -p /mnt/boot/efi
         mount "$TARGET_EFI" /mnt/boot/efi
-        log_info "Mounted $TARGET_EFI to /mnt/boot/efi"
     fi
 }
 
 mount_virtual_filesystems() {
     log_step "Mounting virtual filesystems for chroot..."
-    
-    # FIX: Create the necessary directories inside the newly formatted /mnt root
     mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run
     
     mount --rbind /dev /mnt/dev
     mount --make-rslave /mnt/dev
-    
     mount -t proc /proc /mnt/proc
     mount --rbind /sys /mnt/sys
     mount --make-rslave /mnt/sys
-    
     mount --rbind /run /mnt/run
     mount --make-rslave /mnt/run
+}
+
+# ==========================================
+# STEP 4: Base System Installation
+# ==========================================
+select_libc() {
+    log_step "Select C library (libc)..."
+    echo "  1) glibc (Recommended - Best compatibility with proprietary software & games)"
+    echo "  2) musl  (Lightweight - Strict standards, some software may not work)"
+    while true; do
+        read -p "Enter choice [1-2] (default: 1): " choice
+        choice=${choice:-1}
+        case $choice in
+            1) LIBC="glibc"; VOID_ARCH_SUFFIX=""; break ;;
+            2) LIBC="musl"; VOID_ARCH_SUFFIX="-musl"; break ;;
+            *) log_warn "Invalid choice." ;;
+        esac
+    done
+    FULL_ARCH="${VOID_ARCH}${VOID_ARCH_SUFFIX}"
+    REPO="https://repo-default.voidlinux.org/current"
+    log_info "Selected: $LIBC (Architecture: $FULL_ARCH)"
+}
+
+install_base_system() {
+    log_step "Copying XBPS repository keys to target..."
+    mkdir -p /mnt/var/db/xbps/keys
+    cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
     
-    log_info "Virtual filesystems mounted."
+    log_step "Syncing package databases and installing base-system & linux kernel..."
+    log_info "This will download and install the core system. It may take a few minutes."
+    
+    # -S: sync repo index
+    # -y: assume yes to all prompts
+    # -r /mnt: target root directory
+    # -R: repository URL
+    if ! XBPS_ARCH="$FULL_ARCH" xbps-install -S -y -r /mnt -R "$REPO" base-system linux; then
+        log_error "Failed to install base system. Check your internet connection and try again."
+        exit 1
+    fi
+    
+    log_info "Base system and kernel installed successfully!"
 }
 
 # ==========================================
@@ -232,9 +249,15 @@ main() {
     mount_filesystems
     mount_virtual_filesystems
     
+    # Step 4
+    echo ""
+    log_step "Starting Base System Installation..."
+    select_libc
+    install_base_system
+    
     echo ""
     echo "========================================="
-    log_info "Step 3 Completed Successfully!"
+    log_info "Step 4 Completed Successfully!"
     echo "========================================="
 }
 
