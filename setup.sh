@@ -1,5 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Step 4: Base System Installation
+# void-installer.sh - Step 5: System Configuration (Updated Defaults)
 
 set -e
 
@@ -129,6 +129,8 @@ EOF
         
         TARGET_EFI="${TARGET_DISK}${PART_PREFIX}1"
         TARGET_ROOT="${TARGET_DISK}${PART_PREFIX}2"
+        log_info "Created EFI System Partition: $TARGET_EFI"
+        log_info "Created Root Partition: $TARGET_ROOT"
     else
         log_step "Creating MBR partition table for BIOS..."
         sfdisk --wipe=always "$TARGET_DISK" <<EOF
@@ -137,6 +139,7 @@ type=83, bootable
 EOF
         
         TARGET_ROOT="${TARGET_DISK}${PART_PREFIX}1"
+        log_info "Created Bootable Root Partition: $TARGET_ROOT"
     fi
 
     partprobe "$TARGET_DISK" 2>/dev/null || true
@@ -150,31 +153,40 @@ format_filesystems() {
     log_step "Formatting filesystems..."
     
     if [[ "$BOOT_MODE" == "efi" ]]; then
+        log_info "Formatting EFI partition ($TARGET_EFI) as FAT32..."
         mkfs.vfat -F 32 "$TARGET_EFI" > /dev/null
     fi
+    
+    log_info "Formatting Root partition ($TARGET_ROOT) as ext4..."
     mkfs.ext4 -F "$TARGET_ROOT" > /dev/null
 }
 
 mount_filesystems() {
     log_step "Mounting target filesystems to /mnt..."
+    
     mkdir -p /mnt
     mount "$TARGET_ROOT" /mnt
+    log_info "Mounted $TARGET_ROOT to /mnt"
     
     if [[ "$BOOT_MODE" == "efi" ]]; then
         mkdir -p /mnt/boot/efi
         mount "$TARGET_EFI" /mnt/boot/efi
+        log_info "Mounted $TARGET_EFI to /mnt/boot/efi"
     fi
 }
 
 mount_virtual_filesystems() {
     log_step "Mounting virtual filesystems for chroot..."
+    
     mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run
     
     mount --rbind /dev /mnt/dev
     mount --make-rslave /mnt/dev
+    
     mount -t proc /proc /mnt/proc
     mount --rbind /sys /mnt/sys
     mount --make-rslave /mnt/sys
+    
     mount --rbind /run /mnt/run
     mount --make-rslave /mnt/run
 }
@@ -208,16 +220,99 @@ install_base_system() {
     log_step "Syncing package databases and installing base-system & linux kernel..."
     log_info "This will download and install the core system. It may take a few minutes."
     
-    # -S: sync repo index
-    # -y: assume yes to all prompts
-    # -r /mnt: target root directory
-    # -R: repository URL
     if ! XBPS_ARCH="$FULL_ARCH" xbps-install -S -y -r /mnt -R "$REPO" base-system linux; then
         log_error "Failed to install base system. Check your internet connection and try again."
         exit 1
     fi
     
     log_info "Base system and kernel installed successfully!"
+}
+
+# ==========================================
+# STEP 5: System Configuration
+# ==========================================
+configure_fstab() {
+    log_step "Generating /etc/fstab..."
+    cat > /mnt/etc/fstab <<EOF
+# /etc/fstab: static file system information.
+UUID=$(blkid -s UUID -o value "$TARGET_ROOT")  /      ext4  defaults  0  1
+EOF
+    if [[ "$BOOT_MODE" == "efi" ]]; then
+        echo "UUID=$(blkid -s UUID -o value "$TARGET_EFI")  /boot/efi  vfat  defaults  0  2" >> /mnt/etc/fstab
+    fi
+    log_info "fstab generated."
+}
+
+configure_system_settings() {
+    log_step "Configuring hostname, timezone, locale, and keyboard..."
+    
+    # Hostname
+    read -p "Enter hostname (e.g., void-pc): " HOSTNAME
+    echo "$HOSTNAME" > /mnt/etc/hostname
+    
+    # Timezone (Default: Europe/Berlin)
+    echo "Common timezones: Europe/Berlin, UTC, America/New_York, Asia/Tokyo"
+    read -p "Enter timezone (default: Europe/Berlin): " TZ
+    TZ=${TZ:-Europe/Berlin}
+    chroot /mnt ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
+    
+    # Locale (System Language: American English)
+    log_info "Setting system language to American English (en_US.UTF-8)..."
+    echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+    
+    if [[ "$LIBC" == "glibc" ]]; then
+        echo "en_US.UTF-8 UTF-8" > /mnt/etc/default/libc-locales
+        chroot /mnt xbps-reconfigure -f glibc-locales > /dev/null
+    fi
+    
+    # Keyboard Layout (TTY: German - no dead keys)
+    log_info "Setting TTY keyboard layout to German (no dead keys)..."
+    # In Void, KEYMAP is set in /etc/rc.conf
+    echo 'KEYMAP="de-nodeadkeys"' >> /mnt/etc/rc.conf
+    
+    log_info "System settings configured."
+}
+
+configure_users() {
+    log_step "Setting root password..."
+    while true; do
+        read -s -p "Enter new ROOT password: " ROOT_PASS; echo
+        read -s -p "Confirm ROOT password: " ROOT_PASS2; echo
+        [[ "$ROOT_PASS" == "$ROOT_PASS2" && -n "$ROOT_PASS" ]] && break
+        log_warn "Passwords do not match or are empty. Try again."
+    done
+    
+    log_step "Creating standard user..."
+    read -p "Enter username (default: void): " USERNAME
+    USERNAME=${USERNAME:-void}
+    
+    while true; do
+        read -s -p "Enter password for $USERNAME: " USER_PASS; echo
+        read -s -p "Confirm password for $USERNAME: " USER_PASS2; echo
+        [[ "$USER_PASS" == "$USER_PASS2" && -n "$USER_PASS" ]] && break
+        log_warn "Passwords do not match or are empty. Try again."
+    done
+    
+    # Execute user creation inside chroot
+    chroot /mnt /bin/bash -c "
+        echo 'root:$ROOT_PASS' | chpasswd
+        useradd -m -G wheel,audio,video,storage,network -s /bin/bash $USERNAME
+        echo '$USERNAME:$USER_PASS' | chpasswd
+    "
+    log_info "Users configured. '$USERNAME' has been added to the 'wheel' group for sudo access."
+}
+
+enable_services() {
+    log_step "Enabling essential services (dhcpcd)..."
+    chroot /mnt ln -sf /etc/sv/dhcpcd /etc/runit/runsvdir/default/
+    log_info "Network service enabled."
+}
+
+finalize_installation() {
+    log_step "Finalizing installation (configuring packages & generating initramfs)..."
+    log_info "This may take a minute. Please wait..."
+    chroot /mnt xbps-reconfigure -fa > /dev/null
+    log_info "Installation finalized successfully!"
 }
 
 # ==========================================
@@ -255,9 +350,18 @@ main() {
     select_libc
     install_base_system
     
+    # Step 5
+    echo ""
+    log_step "Starting System Configuration..."
+    configure_fstab
+    configure_system_settings
+    configure_users
+    enable_services
+    finalize_installation
+    
     echo ""
     echo "========================================="
-    log_info "Step 4 Completed Successfully!"
+    log_info "Step 5 Completed Successfully!"
     echo "========================================="
 }
 
