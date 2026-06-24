@@ -1,5 +1,6 @@
 #!/bin/bash
-# void-installer.sh - Complete Guided Void Linux Installer (Final Fixes)
+# void-installer.sh - Complete Guided Void Linux Installer
+# Inspired by instaVoid.sh for robust chroot and configuration handling.
 
 set -e
 
@@ -220,7 +221,6 @@ install_base_system() {
     log_step "Syncing package databases and installing base-system, linux kernel, and kbd..."
     log_info "This will download and install the core system. It may take a few minutes."
     
-    # FIX: Explicitly install 'kbd' to ensure keymap utilities are present
     if ! XBPS_ARCH="$FULL_ARCH" xbps-install -S -y -r /mnt -R "$REPO" base-system linux kbd; then
         log_error "Failed to install base system. Check your internet connection and try again."
         exit 1
@@ -236,8 +236,13 @@ prepare_chroot() {
     log_step "Configuring DNS for chroot environment..."
     cp -L /etc/resolv.conf /mnt/etc/resolv.conf
     
-    log_step "Initializing base system configuration (creating /etc/shadow, etc.)..."
-    chroot /mnt xbps-reconfigure -fa > /dev/null
+    log_step "Initializing base system configuration..."
+    # ADOPTED FROM instaVoid.sh: Configure base-files OUTSIDE chroot first!
+    # This ensures /etc/shadow, /etc/passwd, etc. are created properly before we enter chroot.
+    xbps-reconfigure -r /mnt -f base-files >/dev/null 2>&1
+    
+    log_step "Configuring all base packages inside chroot..."
+    chroot /mnt xbps-reconfigure -fa >/dev/null 2>&1
     log_info "Chroot prepared and base packages configured."
 }
 
@@ -279,12 +284,18 @@ configure_system_settings() {
     fi
     
     # Keyboard Layout (TTY: German - no dead keys)
+    # ADOPTED FROM instaVoid.sh: Check for vconsole.conf first, otherwise modify rc.conf
     log_info "Setting TTY keyboard layout to German (no dead keys)..."
-    # FIX: Clean up any previous KEYMAP entries
-    grep -v '^KEYMAP=' /mnt/etc/rc.conf > /mnt/etc/rc.conf.tmp 2>/dev/null || true
-    # FIX: Add the new KEYMAP WITHOUT QUOTES, exactly as per Void Handbook documentation
-    echo 'KEYMAP=de-nodeadkeys' >> /mnt/etc/rc.conf.tmp
-    mv /mnt/etc/rc.conf.tmp /mnt/etc/rc.conf
+    if [ -f /mnt/etc/vconsole.conf ]; then
+        sed -i -e "s|KEYMAP=.*|KEYMAP=de-nodeadkeys|g" /mnt/etc/vconsole.conf
+    else
+        # Replace commented #KEYMAP= or ?KEYMAP= or KEYMAP=
+        sed -i -e "s|#?KEYMAP=.*|KEYMAP=de-nodeadkeys|g" /mnt/etc/rc.conf
+        # If it still doesn't exist, append it
+        if ! grep -q "^KEYMAP=" /mnt/etc/rc.conf; then
+            echo "KEYMAP=de-nodeadkeys" >> /mnt/etc/rc.conf
+        fi
+    fi
     
     log_info "System settings configured."
 }
@@ -309,16 +320,15 @@ configure_users() {
         log_warn "Passwords do not match or are empty. Try again."
     done
     
-    # FIX: Use printf instead of echo to pipe passwords to chpasswd. 
-    # This prevents shell interpolation issues with special characters.
+    # ADOPTED FROM instaVoid.sh: Use echo and chpasswd -c SHA512 for robust password setting
     log_info "Setting root password..."
-    printf "%s:%s\n" "root" "$ROOT_PASS" | chroot /mnt chpasswd
+    echo "root:$ROOT_PASS" | chroot /mnt chpasswd -c SHA512
     
     log_info "Creating user '$USERNAME'..."
     chroot /mnt useradd -m -G wheel,audio,video,storage,network -s /bin/bash "$USERNAME"
     
     log_info "Setting user password..."
-    printf "%s:%s\n" "$USERNAME" "$USER_PASS" | chroot /mnt chpasswd
+    echo "$USERNAME:$USER_PASS" | chroot /mnt chpasswd -c SHA512
     
     log_info "Users configured. '$USERNAME' has been added to the 'wheel' group for sudo access."
 }
