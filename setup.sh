@@ -1,5 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Step 3: Formatting & Mounting
+# void-installer.sh - Step 3: Formatting & Mounting (Fixed)
 
 set -e
 
@@ -186,6 +186,9 @@ mount_filesystems() {
 
 mount_virtual_filesystems() {
     log_step "Mounting virtual filesystems for chroot..."
+    
+    # FIX: Create the necessary directories inside the newly formatted /mnt root
+    mkdir -p /mnt/dev /mnt/proc /mnt/sys /mnt/run
     
     mount --rbind /dev /mnt/dev
     mount --make-rslave /mnt/dev
