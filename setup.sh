@@ -1,5 +1,5 @@
 #!/bin/bash
-# void-installer.sh - Complete Installer (Steps 1-7)
+# void-installer.sh - Complete Installer (Steps 1-7) - DNS Fix
 
 set -e
 
@@ -222,6 +222,20 @@ install_base_system() {
 }
 
 # ==========================================
+# FIX: Prepare Chroot Network
+# ==========================================
+prepare_chroot_network() {
+    log_step "Configuring DNS for chroot environment..."
+    if [[ -f /etc/resolv.conf ]]; then
+        # Use cp -L to dereference symlinks (e.g., if resolv.conf points to /run/...)
+        cp -L /etc/resolv.conf /mnt/etc/resolv.conf
+        log_info "DNS configuration copied to chroot."
+    else
+        log_warn "/etc/resolv.conf not found on host. Network inside chroot may fail."
+    fi
+}
+
+# ==========================================
 # STEP 5: System Configuration
 # ==========================================
 configure_fstab() {
@@ -310,7 +324,6 @@ install_bootloader() {
     fi
 
     if [[ "$BOOT_MODE" == "efi" ]]; then
-        # Determine the correct GRUB EFI target based on architecture
         case "$VOID_ARCH" in
             x86_64)  GRUB_EFI_PKG="grub-x86_64-efi"; GRUB_TARGET="x86_64-efi" ;;
             i686)    GRUB_EFI_PKG="grub-i386-efi";    GRUB_TARGET="i386-efi" ;;
@@ -326,7 +339,6 @@ install_bootloader() {
             log_warn "Standard EFI install failed. Trying with --no-nvram..."
             chroot /mnt grub-install --target="$GRUB_TARGET" --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram --recheck
 
-            # Fallback: copy to removable/boot fallback path
             log_info "Installing fallback bootloader to /boot/efi/EFI/boot/..."
             chroot /mnt mkdir -p /boot/efi/EFI/boot
             case "$VOID_ARCH" in
@@ -336,7 +348,6 @@ install_bootloader() {
             esac
         fi
     else
-        # BIOS installation
         log_info "Installing grub for BIOS..."
         chroot /mnt xbps-install -S -y grub
 
@@ -344,7 +355,6 @@ install_bootloader() {
         chroot /mnt grub-install --target=i386-pc "$TARGET_DISK"
     fi
 
-    # Generate GRUB configuration
     log_info "Generating GRUB configuration..."
     chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -361,7 +371,6 @@ finalize_and_cleanup() {
 
     log_step "Cleaning up - unmounting filesystems..."
 
-    # Unmount in reverse order
     umount -l /mnt/sys/firmware/efi/efivars 2>/dev/null || true
     umount -l /mnt/run 2>/dev/null || true
     umount -l /mnt/sys 2>/dev/null || true
@@ -426,6 +435,9 @@ main() {
     log_step "Installing Base System..."
     select_libc
     install_base_system
+    
+    # FIX: Copy DNS config so chroot has internet access
+    prepare_chroot_network
 
     # Step 5
     echo ""
