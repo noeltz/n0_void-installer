@@ -23,6 +23,7 @@ noctalia
 nss-mdns
 ntfs-3g
 pipewire
+sudo
 tuigreet
 udiskie
 upower

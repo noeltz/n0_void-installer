@@ -80,6 +80,10 @@ chrootFunc() {
 ${PASS}
 ${PASS}
 EOF
+    passwd root <<EOF
+${PASS}
+${PASS}
+EOF
     echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers.d/wheel_group
     chmod 440 /etc/sudoers.d/wheel_group
 }
