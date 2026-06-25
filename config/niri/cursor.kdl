@@ -1,0 +1,7 @@
+cursor {
+    xcursor-theme "BreezeX-Light"
+    xcursor-size 40
+
+    hide-when-typing
+    // hide-after-inactive-ms 1000
+}

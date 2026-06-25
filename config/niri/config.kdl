@@ -1,0 +1,28 @@
+include "inputs.kdl"
+include "outputs.kdl"
+include "layout.kdl"
+include "spawns.kdl"
+include "animations.kdl"
+include "window-rules.kdl"
+include "binds.kdl"
+include "cursor.kdl"
+
+hotkey-overlay {
+    // Uncomment this line to disable the "Important Hotkeys" pop-up at startup.
+    // skip-at-startup
+}
+
+prefer-no-csd
+
+screenshot-path "~/Pictures/Screenshots/Screenshot %H:%M:%S %d-%m-%Y.png"
+
+// You can also set this to null to disable saving screenshots to disk.
+// screenshot-path null
+
+debug {
+  // Allows notification actions and window activation from Noctalia.
+  honor-xdg-activation-with-invalid-serial
+}
+
+
+

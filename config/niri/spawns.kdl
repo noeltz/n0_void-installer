@@ -1,0 +1,7 @@
+spawn-at-startup "pipewire"
+spawn-at-startup "noctalia"
+spawn-at-startup "udiskie"
+//Sleep and lock
+spawn-sh-at-startup "swayidle -w timeout 300 '/usr/bin/off_screen.sh' resume '/usr/bin/on_screen.sh'"
+spawn-sh-at-startup "swayidle -w before-sleep '/usr/bin/lock.sh'"
+spawn-sh-at-startup "swayidle timeout 330 'loginctl suspend'"
