@@ -30,7 +30,7 @@ This is a simple script that uses [fzf](https://github.com/junegunn/fzf) in most
 3. - UEFI partition with 1GB
  -  Install Void Linux onto the selected disk
  - Create a user and add them to the basic groups *(Not yet configurable)*
- - Set up locales + keyboard and console font according to the user
+ - Set up locales, timezone and keyboard according to the user
  -  Configure Wayland
  -  Set up Niri + Noctalia
  -  Configure sound, bluetooth and more
@@ -48,7 +48,7 @@ Log in as ``root``:``voidlinux`` and follow the installation instructions:
 
 ```bash
 xbps-install -Suy xbps git
-git clone https://codeberg.org/ojuna/void-installer.git
-cd void-installer/
+git clone https://github.com/noeltz/n0_void-installer.git
+cd n0_void-installer/
 ./install.sh
 ```
