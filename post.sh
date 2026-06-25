@@ -75,7 +75,7 @@ chrootFunc() {
     sed -Ei "s/#FONT=.*/FONT=\"$CF\"/" /etc/rc.conf
     ln -sf /usr/share/zoneinfo/$REGION/$TIMEZONE /etc/localtime
 
-    useradd -m -G wheel,lp,audio,video,storage,network,input,users -s /bin/bash $NEWUSER
+    useradd -m -G wheel,lp,audio,video,storage,network,input,users,kvm -s /bin/bash $NEWUSER
     passwd $NEWUSER <<EOF
 ${PASS}
 ${PASS}

@@ -61,10 +61,9 @@ diskFormat() {
 
     DISK_PATH="/dev/$DISK"
     cat > /tmp/parts.sfdisk <<'EOF'
-    label: gpt
-    device: $DISK_PATH
-    ,1G,C12A7328-F81F-11D2-BA4B-00A0C93EC93B,
-    ,,0FC63DAF-8483-4772-8E79-3D69D8477DE4,
+label: gpt
+,1G,C12A7328-F81F-11D2-BA4B-00A0C93EC93B,
+,,0FC63DAF-8483-4772-8E79-3D69D8477DE4,
 EOF
    sfdisk $DISK_PATH < /tmp/parts.sfdisk
 
