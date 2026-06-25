@@ -3,6 +3,7 @@
 INSTALLER_DIR="n0_void-installer"
 
 source ./base.sh
+source ./hardware.sh
 source ./post.sh
 
 clear
@@ -14,6 +15,7 @@ sleep 2
 listDisk				# List connected disks
 diskFormat				# Format disks and set up partitions + BTRFS
 installSystem				# Install the base system
+detectHardware				# Detect hardware -> hardware-packages.txt + hardware-services.txt
 mkdir -p /mnt/$INSTALLER_DIR		# Create and copy scripts for installation inside the CHROOT
 cp -r * /mnt/$INSTALLER_DIR/
 

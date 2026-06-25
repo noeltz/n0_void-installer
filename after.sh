@@ -25,6 +25,17 @@ autoRunit () {
 	ln -sfn "/etc/sv/$i" "/etc/runit/runsvdir/default/"
 	done
 }
+autoHardwareServices () {			# Enables runit services chosen by detectHardware
+	[ -f ./hardware-services.txt ] || return 0
+	while read -r svc; do
+		[ -n "$svc" ] || continue
+		if [ -d "/etc/sv/$svc" ]; then
+			ln -sfn "/etc/sv/$svc" "/etc/runit/runsvdir/default/"
+		else
+			echo "service '$svc' not found in /etc/sv, skipping"
+		fi
+	done < ./hardware-services.txt
+}
 pipewireFunc () {
 
 	mkdir -p /etc/pipewire/pipewire.conf.d

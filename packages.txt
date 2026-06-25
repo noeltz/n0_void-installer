@@ -5,16 +5,16 @@ bluez
 bluez-alsa
 cronie
 cups
+cups-filters
+gutenprint
+system-config-printer
 dejavu-fonts-ttf
 elogind
 firefox
 ghostty
 greetd
 chrony
-intel-video-accel
 libspa-bluetooth
-mesa-dri
-mesa-vulkan-intel
 neovim
 NetworkManager
 nfs-utils
@@ -28,7 +28,6 @@ tuigreet
 udiskie
 upower
 vlc
-vulkan-loader
 wayland
 wireguard
 wireplumber
