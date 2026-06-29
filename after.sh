@@ -16,7 +16,7 @@ autoRunit () {
 		greetd
 		chronyd
 		NetworkManager
-		poolkitd
+		polkitd
 		sv-netmount
 		zramen
 		)
