@@ -3,6 +3,7 @@ apparmor
 avahi
 bluez
 bluez-alsa
+chezmoi
 cronie
 cups
 cups-filters
@@ -23,11 +24,13 @@ noctalia
 nss-mdns
 ntfs-3g
 pipewire
+socklogd-void
 sudo
 tuigreet
 udiskie
 upower
 vlc
+vsv
 wayland
 wireguard
 wireplumber

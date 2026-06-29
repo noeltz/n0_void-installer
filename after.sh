@@ -15,8 +15,10 @@ autoRunit () {
 		dbus
 		greetd
 		chronyd
+		nanoklogd
 		NetworkManager
 		polkitd
+		socklogd
 		sv-netmount
 		zramen
 		)
