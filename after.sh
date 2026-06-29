@@ -18,7 +18,7 @@ autoRunit () {
 		nanoklogd
 		NetworkManager
 		polkitd
-		socklogd
+		socklog-unix
 		sv-netmount
 		zramen
 		)
