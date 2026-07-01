@@ -52,7 +52,7 @@ NetworkManagerFunc () {
 }
 greetdSpecific () {
 	usermod -aG video _greeter
-	cp -rf ./specials/greetd /etc/
+	#cp -rf ./specials/greetd /etc/
 }
 bluetoothSpecific () {
 	usermod -aG bluetooth $NEWUSER
