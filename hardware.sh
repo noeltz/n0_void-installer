@@ -86,7 +86,7 @@ detectHardware() (
     _detectBroadcomWifi
 
     # --- Printer brand (cannot be auto-detected at install time) ---
-    _printerChoose
+    # _printerChoose
 
     # --- Fingerprint reader ---
     _detectFingerprint
