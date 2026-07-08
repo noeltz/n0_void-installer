@@ -24,7 +24,7 @@ noctalia
 nss-mdns
 ntfs-3g
 pipewire
-socklogd-void
+socklog-void
 sudo
 tuigreet
 udiskie
