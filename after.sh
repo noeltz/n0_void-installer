@@ -61,13 +61,14 @@ userdirsUpdate () {
 	su $NEWUSER -c "xdg-user-dirs-update"
 }
 configFiles () {
-    cd ./config
-    install -d -o $NEWUSER -g $NEWUSER -m 755 /home/$NEWUSER/.config
-    directories=($(find "$(pwd)" -mindepth 1 -maxdepth 1 -type d ))
-    for i in ${directories[@]}; do
-        cp -rf "$i" "/home/$NEWUSER/.config/"
-        #ln -s "$i" "/home/$NEWUSER/.config/"
-    done
-    chown -hR $NEWUSER:$NEWUSER /home/$NEWUSER/.config/*
-    cd $OLDPWD
+   # cd ./config
+   # install -d -o $NEWUSER -g $NEWUSER -m 755 /home/$NEWUSER/.config
+   # directories=($(find "$(pwd)" -mindepth 1 -maxdepth 1 -type d ))
+   # for i in ${directories[@]}; do
+   #     cp -rf "$i" "/home/$NEWUSER/.config/"
+   #     #ln -s "$i" "/home/$NEWUSER/.config/"
+   # done
+   # chown -hR $NEWUSER:$NEWUSER /home/$NEWUSER/.config/*
+   # cd $OLDPWD
+	echo " "
 }
