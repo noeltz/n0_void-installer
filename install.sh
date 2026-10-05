@@ -328,11 +328,10 @@ preflight() {
     echo "Not booted in UEFI mode." >&2
     exit 3
   fi
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "curl not found." >&2
-    exit 3
-  fi
-  if ! curl -fsI --max-time 10 "$MIRROR/current/x86_64-repodata" >/dev/null 2>&1; then
+  # Check 6 uses only bash /dev/tcp: the live ISO ships no curl, and its xbps
+  # may be too old for the current repositories (both verified on the ISO).
+  local mirror_host=${MIRROR#https://}
+  if ! timeout 10 bash -c "exec 3<>/dev/tcp/${mirror_host%%/*}/443" 2>/dev/null; then
     echo "No network connection to $MIRROR. Connect first and re-run." >&2
     exit 3
   fi
@@ -343,7 +342,9 @@ preflight() {
     exit 3
   fi
 
-  # Live-environment tools (idempotent).
+  # Live-environment tools (idempotent). xbps is updated first: an outdated
+  # xbps refuses all other transactions ("xbps must be updated"). curl is
+  # installed here, not required beforehand.
   if ! xbps-install -Syu xbps; then
     echo "Failed to install live tools." >&2
     exit 3

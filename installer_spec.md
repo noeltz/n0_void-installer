@@ -1,6 +1,6 @@
 # Void Linux Installer — Development Specification
 
-**Version:** 1.1 (draft for implementation; incorporates review findings)
+**Version:** 1.2 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl and its xbps needs a self-update first)
 **Audience:** Senior developer implementing the installer. Nothing in this document is optional or open to interpretation unless it is explicitly marked *configurable*.
 **Language of the deliverable:** Bash.
 
@@ -99,7 +99,7 @@ The installer MUST be a single file so it can be fetched on the live ISO with on
 
 ## 4. Execution environment and live-ISO prerequisites
 
-The installer runs as **root** on the Void live ISO. The official ISO provides `curl`; this is an explicit assumption (check 6 distinguishes "curl missing" from "no network"). Preflight checks (function `preflight`, executed first, in this order; each failure prints one error line and exits with code 3, except check 0):
+The installer runs as **root** on the Void live ISO. The official ISO ships **neither `curl` nor an xbps new enough for the current repositories** (both verified empirically), so the installer MUST NOT depend on either being present beforehand: check 6 tests the network using only bash's `/dev/tcp`, and the live-tools step (below) updates xbps first and installs `curl` together with the other tools. Preflight checks (function `preflight`, executed first, in this order; each failure prints one error line and exits with code 3, except check 0):
 
 | # | Check | Command / condition | Error message |
 |---|---|---|---|
@@ -109,7 +109,7 @@ The installer runs as **root** on the Void live ISO. The official ISO provides `
 | 3 | x86_64 | `[[ $(uname -m) == x86_64 ]]` | `Only x86_64 is supported.` |
 | 4 | glibc live system | `ldd --version 2>&1 \| grep -qi 'GNU libc'` | `musl is not supported.` |
 | 5 | UEFI boot | `[[ -d /sys/firmware/efi ]]` | `Not booted in UEFI mode.` |
-| 6 | `curl` present, then network | `command -v curl`, then `curl -fsI --max-time 10 "$MIRROR/current/x86_64-repodata"` | `curl not found.` / `No network connection to $MIRROR. Connect first and re-run.` |
+| 6 | Network reachable (bash only, no external tools) | `timeout 10 bash -c "exec 3<>/dev/tcp/$HOST/443" 2>/dev/null` where `$HOST` is `$MIRROR` without `https://` and without any path | `No network connection to $MIRROR. Connect first and re-run.` |
 | 7 | RAM ≥ 1 GiB | `MemTotal` in `/proc/meminfo` ≥ 1048576 kB | `At least 1 GiB RAM required.` |
 
 After the checks, install the live-environment tools (one call, always, idempotent):
@@ -923,6 +923,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 20. **Config is parsed, not sourced** (section 6).
 21. **Users are not added to the `network` group** (elogind + polkit grant NetworkManager access to local sessions).
 22. **Root recovery:** root is locked and `sudo` is the only escalation path. If the user's password is lost, recovery means booting the live ISO, mounting the subvolumes as in 10.4, chrooting and running `passwd`. The README MUST state this.
+23. **Self-healing preflight:** the live ISO ships neither `curl` nor a current `xbps`. Preflight therefore needs no external tool for its network check (bash `/dev/tcp`), updates `xbps` (`xbps-install -Syu xbps`) as the first live-tools action, and installs `curl` with the live tools. The README one-liner bootstraps xbps/curl only to fetch the script itself; an `install.sh` transferred by any other means (USB, scp) self-heals.
 
 ---
 
