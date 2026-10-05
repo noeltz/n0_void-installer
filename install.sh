@@ -775,6 +775,43 @@ prompt_password() {
   done
 }
 
+prompt_menu() {  # $1 = var, $2 = title, $3 = prompt text, rest = tag/desc pairs
+  local var=$1 title=$2 text=$3 choice
+  shift 3
+  if ! choice=$(dialog --clear --title "$title" --default-item "${!var:-}" \
+      --menu "$text" 20 76 10 "$@" 3>&1 1>&2 2>&3); then
+    exit 4
+  fi
+  printf -v "$var" '%s' "$choice"
+}
+
+prompt_timezone() {
+  local zones=() entries=() z
+  mapfile -t zones < <(find /usr/share/zoneinfo -type f \
+      ! -path '*/posix/*' ! -path '*/right/*' \
+      ! -name '*.tab' ! -name leapseconds ! -name tzdata.zi \
+      ! -name posixrules ! -name SECURITY ! -name '+VERSION' \
+      -printf '%P\n' | sort)
+  if (( ${#zones[@]} == 0 )); then
+    prompt_value TIMEZONE "Timezone (e.g. Europe/Berlin)"
+    return 0
+  fi
+  for z in "${zones[@]}"; do entries+=("$z" ""); done
+  prompt_menu TIMEZONE "TIMEZONE" "Select timezone" "${entries[@]}"
+}
+
+prompt_locale() {
+  local names=() entries=() n
+  mapfile -t names < <(sed -e 's/^#//' -e 's/^[[:space:]]*//' /etc/default/libc-locales 2>/dev/null \
+      | awk '$2 == "UTF-8" {print $1}' | sort -u)
+  if (( ${#names[@]} == 0 )); then
+    prompt_value LOCALE "Locale (e.g. en_US.UTF-8)"
+    return 0
+  fi
+  for n in "${names[@]}"; do entries+=("$n" ""); done
+  prompt_menu LOCALE "LOCALE" "Select locale" "${entries[@]}"
+}
+
 prompt_missing() {
   if (( YES_MODE == 1 )); then
     return 0
@@ -789,10 +826,10 @@ prompt_missing() {
     prompt_password
   fi
   if ! is_config_set TIMEZONE; then
-    prompt_value TIMEZONE "Timezone (e.g. Europe/Berlin)"
+    prompt_timezone
   fi
   if ! is_config_set LOCALE; then
-    prompt_value LOCALE "Locale (e.g. en_US.UTF-8)"
+    prompt_locale
   fi
   if ! is_config_set KEYMAP; then
     prompt_value KEYMAP "Console keymap"
