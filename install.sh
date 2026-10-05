@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.1.1"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -187,9 +187,12 @@ validate_one() {
       fi
       ;;
     LOCALE)
+      # Lines in libc-locales carry trailing whitespace (the file is generated
+      # from glibc's localedata/SUPPORTED, where the continuation backslash
+      # becomes a space) — the match must tolerate it.
       esc=$(locale_key "$val")
       esc=${esc//./\\.}
-      if ! grep -qiE "^#?[[:space:]]*${esc}[[:space:]]+UTF-8$" /etc/default/libc-locales 2>/dev/null; then
+      if ! grep -qiE "^#?[[:space:]]*${esc}[[:space:]]+UTF-8[[:space:]]*$" /etc/default/libc-locales 2>/dev/null; then
         VALIDATE_REASON="not available in /etc/default/libc-locales (e.g. en_US.UTF-8)"
         return 1
       fi
@@ -996,11 +999,11 @@ configure_system() {
     printf 'KEYMAP="%s"\n' "$KEYMAP" >> /mnt/etc/rc.conf
   fi
 
-  if ! grep -qiE "^#?[[:space:]]*${locale_esc}[[:space:]]+UTF-8$" /mnt/etc/default/libc-locales; then
+  if ! grep -qiE "^#?[[:space:]]*${locale_esc}[[:space:]]+UTF-8[[:space:]]*$" /mnt/etc/default/libc-locales; then
     echo "Locale not available: $LOCALE" >&2
     exit 2
   fi
-  sed -i -E "s|^#[[:space:]]*(${locale_esc}[[:space:]]+UTF-8)|\1|" /mnt/etc/default/libc-locales
+  sed -i -E "s|^#[[:space:]]*(${locale_esc}[[:space:]]+UTF-8)[[:space:]]*$|\1|" /mnt/etc/default/libc-locales
   echo "LANG=$LOCALE" > /mnt/etc/locale.conf
   chroot /mnt xbps-reconfigure -f glibc-locales
 
