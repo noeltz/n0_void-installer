@@ -1,0 +1,78 @@
+# void-installer configuration
+#
+# Copy to install.conf next to install.sh (or pass --config FILE).
+# Format: KEY=value, one per line. Blank lines and #-comments are ignored.
+# Values may be wrapped in matching single or double quotes (recommended for
+# anything containing $ — values are taken literally, never expanded).
+
+# ---------------------------------------------------------------------------
+# REQUIRED (no defaults)
+# ---------------------------------------------------------------------------
+
+# Whole disk to install to. THE ENTIRE DISK IS ERASED.
+# Kernel device name (/dev/sda, /dev/nvme0n1, /dev/vda, /dev/mmcblk0) or a
+# /dev/disk/by-id/ path (normalised automatically). Must be a whole disk,
+# unmounted, at least 20 GiB.
+TARGET_DISK=/dev/sda
+
+# Login name of the created user. Lowercase letters, digits, _, -; must not
+# be root. The user gets sudo via the wheel group (root stays locked).
+USERNAME=alice
+
+# Password for the new user, in plain text. Prompted for (twice, hidden) in
+# interactive mode if unset. Alternative: USER_PASSWORD_HASH below — if both
+# are set, the hash wins. Change this before using the example!
+USER_PASSWORD=change-me
+
+# SHA-512 crypt hash of the user password ($6$...). Taken literally — always
+# keep the single quotes so the $ characters survive. Generate e.g. with
+# openssl passwd -6. If set, it wins over USER_PASSWORD.
+#USER_PASSWORD_HASH='$6$rounds=5000$salt$hash'
+
+# ---------------------------------------------------------------------------
+# OPTIONAL (defaults shown; uncomment to change)
+# ---------------------------------------------------------------------------
+
+# System hostname. Default: void
+# Allowed: lowercase letters, digits, hyphens; max 63 chars.
+#HOSTNAME=void
+
+# Login shell of the new user. Default: /bin/bash. Only /bin/bash in v1.
+#USER_SHELL=/bin/bash
+
+# Timezone (path under /usr/share/zoneinfo). Default: UTC
+#TIMEZONE=UTC
+
+# glibc locale. Default: en_US.UTF-8. Must exist in /etc/default/libc-locales.
+#LOCALE=en_US.UTF-8
+
+# Console keymap (validated with loadkeys). Default: us
+#KEYMAP=us
+
+# Package mirror base URL; the installer appends /current itself.
+# Default: https://repo-default.voidlinux.org
+# Must be https://, no trailing slash, no /current.
+#MIRROR=https://repo-default.voidlinux.org
+
+# Swap handling: zram (zramen, zstd, 50% RAM, max 8192 MiB) or none.
+# Default: zram. No swap partition or swap file either way.
+#SWAP=zram
+
+# chezmoi dotfiles repository, applied as the new user during installation.
+# https://... URL or GitHub user/repo (public repositories only), or empty to
+# skip dotfiles entirely. Default: empty
+#CHEZMOI_REPO=alice/dotfiles
+
+# Extra packages to install (space-separated). Each name is verified against
+# the mirror before anything is written to disk. Default: empty
+#EXTRA_PACKAGES=htop tmux
+
+# Hardware detection overrides. Default for all: auto (use detection).
+# HW_CHASSIS:      auto | laptop | desktop | vm
+# HW_TOUCH:        auto | yes | no
+# HW_FINGERPRINT:  auto | yes | no
+# HW_BLUETOOTH:    auto | yes | no
+#HW_CHASSIS=auto
+#HW_TOUCH=auto
+#HW_FINGERPRINT=auto
+#HW_BLUETOOTH=auto

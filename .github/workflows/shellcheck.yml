@@ -1,0 +1,28 @@
+name: shellcheck
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: ShellCheck install.sh
+        run: shellcheck install.sh
+
+      # The embedded heredocs are invisible to ShellCheck; extract the
+      # script-type heredoc (the xbps wrapper, delimiter WRAPPER_EOF) and
+      # check it separately (installer_spec.md section 3.1).
+      - name: ShellCheck embedded xbps wrapper
+        run: |
+          start=$(grep -n "<<'WRAPPER_EOF'" install.sh | head -1 | cut -d: -f1)
+          end=$(grep -n '^WRAPPER_EOF$' install.sh | head -1 | cut -d: -f1)
+          test -n "$start" -a -n "$end"
+          sed -n "$((start+1)),$((end-1))p" install.sh > wrapper.sh
+          shellcheck wrapper.sh
