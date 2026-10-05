@@ -343,9 +343,16 @@ preflight() {
   fi
 
   # Live-environment tools (idempotent). xbps is updated first: an outdated
-  # xbps refuses all other transactions ("xbps must be updated"). curl is
-  # installed here, not required beforehand.
+  # xbps refuses all other transactions ("xbps must be updated"). The full
+  # sync afterwards aligns all live-system libraries: freshly installed
+  # tools otherwise crash against the ISO's older libraries with
+  # "symbol lookup error" (observed with curl). curl is installed here,
+  # not required beforehand.
   if ! xbps-install -Syu xbps; then
+    echo "Failed to install live tools." >&2
+    exit 3
+  fi
+  if ! xbps-install -Syu; then
     echo "Failed to install live tools." >&2
     exit 3
   fi

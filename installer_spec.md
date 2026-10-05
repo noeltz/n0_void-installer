@@ -1,6 +1,6 @@
 # Void Linux Installer — Development Specification
 
-**Version:** 1.2 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl and its xbps needs a self-update first)
+**Version:** 1.3 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl, its xbps needs a self-update first, and the live system needs a full sync to avoid library version skew)
 **Audience:** Senior developer implementing the installer. Nothing in this document is optional or open to interpretation unless it is explicitly marked *configurable*.
 **Language of the deliverable:** Bash.
 
@@ -116,10 +116,12 @@ After the checks, install the live-environment tools (one call, always, idempote
 
 ```bash
 xbps-install -Syu xbps          # update the package manager first (required by Void before other installs)
+xbps-install -Syu               # full live-system sync: freshly installed tools otherwise crash against the
+                                # ISO's older libraries with "symbol lookup error" (observed with curl)
 xbps-install -Sy dialog gptfdisk parted btrfs-progs dosfstools pciutils usbutils curl   # parted provides partprobe
 ```
 
-If either command fails → `Failed to install live tools.` exit 3.
+If any of these commands fails → `Failed to install live tools.` exit 3.
 
 ---
 
@@ -923,7 +925,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 20. **Config is parsed, not sourced** (section 6).
 21. **Users are not added to the `network` group** (elogind + polkit grant NetworkManager access to local sessions).
 22. **Root recovery:** root is locked and `sudo` is the only escalation path. If the user's password is lost, recovery means booting the live ISO, mounting the subvolumes as in 10.4, chrooting and running `passwd`. The README MUST state this.
-23. **Self-healing preflight:** the live ISO ships neither `curl` nor a current `xbps`. Preflight therefore needs no external tool for its network check (bash `/dev/tcp`), updates `xbps` (`xbps-install -Syu xbps`) as the first live-tools action, and installs `curl` with the live tools. The README one-liner bootstraps xbps/curl only to fetch the script itself; an `install.sh` transferred by any other means (USB, scp) self-heals.
+23. **Self-healing preflight:** the live ISO ships neither `curl` nor a current `xbps`. Preflight therefore needs no external tool for its network check (bash `/dev/tcp`), updates `xbps` (`xbps-install -Syu xbps`) as the first live-tools action, runs a **full live-system sync** (`xbps-install -Syu`) — freshly installed tools otherwise crash against the ISO's older libraries with `symbol lookup error` (observed with curl) — and installs `curl` with the live tools. The README one-liner performs the same sequence before fetching; an `install.sh` transferred by any other means (USB, scp) self-heals.
 
 ---
 

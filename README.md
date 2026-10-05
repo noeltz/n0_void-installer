@@ -26,11 +26,13 @@ come from your dotfiles.
 ## Usage
 
 One-liner straight from the repo (you are root on the live ISO). The ISO
-ships neither a current xbps nor curl — the first two commands fix that
-(the script also handles both itself if you transfer it another way):
+ships neither a current xbps nor curl, and tools installed without a full
+sync crash against the ISO's older libraries ("symbol lookup error") — the
+first three commands fix all of that (install.sh also handles it itself if
+you transfer it another way):
 
 ```sh
-xbps-install -Syu xbps && xbps-install -Sy curl && bash <(curl -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
+xbps-install -Syu xbps && xbps-install -Syu && xbps-install -Sy curl && bash <(curl -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
 ```
 
 Or download the script (and the SHA-256 checksum published next to it) on the
