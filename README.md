@@ -25,27 +25,24 @@ come from your dotfiles.
 
 ## Usage
 
-One-liner straight from the repo (you are root on the live ISO). The ISO
-ships no curl, and installing packages onto its old userland can break them
-("symbol lookup error"), so this fetches install.sh with a self-consistent
-curl booted from a temporary xbps altroot (~100 MB RAM, no system changes):
+Fetch and run (you are root on the live ISO; `xbps-fetch` ships with xbps,
+so this needs no curl and installs nothing):
 
 ```sh
-xbps-install -Syu xbps && R=$(mktemp -d) && mkdir -p "$R/var/db/xbps/keys" && cp /var/db/xbps/keys/* "$R/var/db/xbps/keys/" && xbps-install -Sy -r "$R" curl && bash <("$R/usr/lib/ld-linux-x86-64.so.2" --library-path "$R/usr/lib" "$R/usr/bin/curl" -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
+xbps-fetch https://raw.githubusercontent.com/noeltz/n0_void-installer/main/install.sh && bash install.sh
 ```
 
-Or download the script (and the SHA-256 checksum published next to it) on the
-live ISO and verify before running:
+To verify integrity, fetch with `-s` instead and compare the printed SHA-256
+with the checksum published next to the script:
 
 ```sh
-curl -fLO https://<where-the-script-is-published>/install.sh
-sha256sum -c install.sh.sha256    # or compare with the published checksum
+xbps-fetch -s https://raw.githubusercontent.com/noeltz/n0_void-installer/main/install.sh
 ```
 
-Interactive (disk selection and remaining values via dialogs):
+Interactive run (disk selection and remaining values via dialogs):
 
 ```sh
-sudo bash install.sh
+bash install.sh
 ```
 
 Unattended — every required value must come from the config file:

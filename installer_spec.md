@@ -124,7 +124,7 @@ If this fails → `Failed to update xbps.` exit 3.
 
 Host tools are **not** installed. The ISO's base-system ships everything the installer executes on the host — `sfdisk`, `mkfs.btrfs`, `mkfs.vfat`, `lsblk`, `blkid`, `wipefs`, `udevadm`, `lspci`, `lsusb`, `loadkeys` — and that set is internally consistent. Each tool is verified with `command -v` and, where a benign call exists, executed (`--version`); a failure exits 3 with `Required tool not found on the live system: <t>` / `Required tool not usable on the live system: <t>`.
 
-`dialog` (interactive UI only, not on the ISO) is the single exception: in interactive mode, if missing it is installed with `xbps-install -Sy dialog` (failure → `Failed to install dialog.` exit 3) and then verified. The installer itself executes no curl at all; fetching install.sh is the README one-liner's job, which bootstraps a self-consistent curl inside a temporary xbps altroot (the same `-r` technique as the package probe in 10.1).
+`dialog` (interactive UI only, not on the ISO) is the single exception: in interactive mode, if missing it is installed with `xbps-install -Sy dialog` (failure → `Failed to install dialog.` exit 3) and then verified. The installer itself executes no curl at all; fetching install.sh uses `xbps-fetch` (ships with xbps, present on the ISO, uses xbps's own HTTPS stack — immune to the library-skew problems of installing curl onto the old userland, and no repo transaction so no xbps-version refusal).
 
 ---
 
@@ -931,7 +931,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 20. **Config is parsed, not sourced** (section 6).
 21. **Users are not added to the `network` group** (elogind + polkit grant NetworkManager access to local sessions).
 22. **Root recovery:** root is locked and `sudo` is the only escalation path. If the user's password is lost, recovery means booting the live ISO, mounting the subvolumes as in 10.4, chrooting and running `passwd`. The README MUST state this.
-23. **Self-healing, zero-install preflight:** the live ISO ships no curl, no dialog and an outdated xbps. Preflight self-updates xbps, verifies the ISO's **native** tools instead of installing packages over the old userland (library skew → `symbol lookup error`; a full sync needs ~2.5 GiB and does not fit in the ISO's RAM-backed root), and uses bash `/dev/tcp` for the network check. `dialog` (not on the ISO) is installed on demand in interactive mode. The README one-liner bootstraps a self-consistent curl inside a temporary xbps altroot (`-r`, same technique as the package probe).
+23. **Self-healing, zero-install preflight:** the live ISO ships no curl, no dialog and an outdated xbps. Preflight self-updates xbps, verifies the ISO's **native** tools instead of installing packages over the old userland (library skew → `symbol lookup error`; a full sync needs ~2.5 GiB and does not fit in the ISO's RAM-backed root), and uses bash `/dev/tcp` for the network check. `dialog` (not on the ISO) is installed on demand in interactive mode. Fetching install.sh uses `xbps-fetch` — part of xbps, shipped on the ISO, own HTTPS stack, no repo transaction; no curl anywhere.
 24. **sfdisk instead of sgdisk:** partitioning uses util-linux `sfdisk`, shipped by the ISO — GPT label, type GUIDs and partition names equivalent to `sgdisk -n/-t/-c`, and it re-reads the partition table itself (no `partprobe`, no gptfdisk/parted install). The `udevadm settle` plus device-poll loop stays.
 
 ---
