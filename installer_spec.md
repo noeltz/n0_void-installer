@@ -85,7 +85,7 @@ The installer MUST be a single file so it can be fetched on the live ISO with on
 - Shebang `#!/bin/bash`, first executable lines: `set -Eeuo pipefail`.
 - All logic in functions; the last line of the file is `main "$@"`.
 - Function names (fixed, so the call graph is predictable): `main`, `parse_args`, `load_config`, `preflight`, `detect_hardware`, `build_package_lists`, `probe_packages`, `choose_disk`, `prompt_missing`, `validate_all`, `confirm`, `partition_disk`, `format_disk`, `mount_layout`, `bootstrap_system`, `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user`, `apply_chezmoi`, `install_wrappers`, `initial_snapshot`, `finalize`, `cleanup`.
-- Progress output: one line per step, format `==> [N/16] <step name>`. Command output of tools is not suppressed. There is **no log file**.
+- Progress output: one line per step, format `==> [N/16] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Command output of tools is not suppressed. There is **no log file**.
 - Quote every variable expansion. Use `[[ ]]` for tests. ShellCheck MUST pass with no warnings (disable directives only with a comment explaining why). The embedded heredocs (wrapper, config snippets) are invisible to ShellCheck: CI MUST extract script-type heredocs to temporary files and run ShellCheck on them separately.
 - **ERR-trap discipline (binding).** Under `set -Eeuo pipefail`, expected failures would trigger the ERR trap and be reported as exit 1. Every command whose failure is an expected path MUST be guarded and mapped to its specified exit code:
   ```bash

@@ -11,6 +11,7 @@
 
 set -Eeuo pipefail
 
+INSTALLER_VERSION="1.1.0"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -30,7 +31,9 @@ SV_OPTIONAL=()
 # --------------------------------------------------------------------------
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
+void-installer $INSTALLER_VERSION
+
 Usage: install.sh [--config FILE] [--yes] [--help]
 
   --config FILE  read settings from FILE (default: ./install.conf if it exists)
@@ -793,6 +796,7 @@ prompt_timezone() {
       ! -name posixrules ! -name SECURITY ! -name '+VERSION' \
       -printf '%P\n' | sort)
   if (( ${#zones[@]} == 0 )); then
+    echo "Warning: no timezone list found under /usr/share/zoneinfo, falling back to manual input." >&2
     prompt_value TIMEZONE "Timezone (e.g. Europe/Berlin)"
     return 0
   fi
@@ -805,6 +809,7 @@ prompt_locale() {
   mapfile -t names < <(sed -e 's/^#//' -e 's/^[[:space:]]*//' /etc/default/libc-locales 2>/dev/null \
       | awk '$2 == "UTF-8" {print $1}' | sort -u)
   if (( ${#names[@]} == 0 )); then
+    echo "Warning: no locale list found in /etc/default/libc-locales, falling back to manual input." >&2
     prompt_value LOCALE "Locale (e.g. en_US.UTF-8)"
     return 0
   fi
@@ -1278,6 +1283,7 @@ main() {
   trap cleanup EXIT
   trap 'on_error $LINENO' ERR
 
+  echo "void-installer $INSTALLER_VERSION"
   parse_args "$@"
 
   run_step  1 "Parse arguments and load configuration" load_settings
