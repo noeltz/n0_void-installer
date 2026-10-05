@@ -302,6 +302,19 @@ validate_target_disk() {
 # Preflight (spec section 4)
 # --------------------------------------------------------------------------
 
+require_tool() {  # $1 = tool; extra args = benign invocation for a run check
+  local t=$1
+  shift
+  if ! command -v "$t" >/dev/null 2>&1; then
+    echo "Required tool not found on the live system: $t" >&2
+    exit 3
+  fi
+  if (( $# > 0 )) && ! "$t" "$@" >/dev/null 2>&1; then
+    echo "Required tool not usable on the live system: $t" >&2
+    exit 3
+  fi
+}
+
 preflight() {
   # Check 0 runs before any network use; it is the only check that exits 2.
   if ! [[ $MIRROR =~ ^https://[^/]+(/[^/]+)*$ ]] || [[ $MIRROR == */current ]]; then
@@ -342,23 +355,38 @@ preflight() {
     exit 3
   fi
 
-  # Live-environment tools (idempotent). xbps is updated first: an outdated
-  # xbps refuses all other transactions ("xbps must be updated"). The full
-  # sync afterwards aligns all live-system libraries: freshly installed
-  # tools otherwise crash against the ISO's older libraries with
-  # "symbol lookup error" (observed with curl). curl is installed here,
-  # not required beforehand.
+  # xbps self-update: an outdated xbps refuses all other transactions
+  # ("xbps must be updated"), including the target bootstrap later.
   if ! xbps-install -Syu xbps; then
-    echo "Failed to install live tools." >&2
+    echo "Failed to update xbps." >&2
     exit 3
   fi
-  if ! xbps-install -Syu; then
-    echo "Failed to install live tools." >&2
-    exit 3
-  fi
-  if ! xbps-install -Sy dialog gptfdisk parted btrfs-progs dosfstools pciutils usbutils curl; then
-    echo "Failed to install live tools." >&2
-    exit 3
+
+  # Host tools are NOT installed. The ISO's base-system ships everything the
+  # installer executes on the host, and its set is internally consistent.
+  # Installing current repo packages onto the old ISO userland instead
+  # breaks binaries with "symbol lookup error" (observed with curl), and a
+  # full sync needs more space than the ISO's RAM-backed root offers.
+  # Tools are verified to run, not just to exist.
+  require_tool sfdisk --version
+  require_tool mkfs.btrfs --version
+  require_tool mkfs.vfat
+  require_tool lsblk --version
+  require_tool blkid --version
+  require_tool wipefs --version
+  require_tool udevadm --version
+  require_tool loadkeys
+  require_tool lspci --version
+  require_tool lsusb --version
+  if (( YES_MODE == 0 )); then
+    if ! command -v dialog >/dev/null 2>&1; then
+      # dialog is the only host tool the ISO does not ship
+      if ! xbps-install -Sy dialog; then
+        echo "Failed to install dialog." >&2
+        exit 3
+      fi
+    fi
+    require_tool dialog --version
   fi
 }
 
@@ -787,10 +815,14 @@ partition_disk() {
   umount -R /mnt 2>/dev/null || true
   swapoff -a
   wipefs -af "$TARGET_DISK"
-  sgdisk --zap-all "$TARGET_DISK"
-  sgdisk -n1:0:+1G -t1:ef00 -c1:EFI  "$TARGET_DISK"
-  sgdisk -n2:0:0   -t2:8300 -c2:VOID "$TARGET_DISK"
-  partprobe "$TARGET_DISK"
+  # sfdisk (util-linux, shipped by the ISO) replaces sgdisk: GPT label,
+  # type GUIDs and partition names. It re-reads the partition table itself,
+  # so no partprobe is needed.
+  sfdisk --wipe always "$TARGET_DISK" <<'EOF'
+label: gpt
+size=1GiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="VOID"
+EOF
   udevadm settle
   local i=0
   until [[ -b $(part 1) && -b $(part 2) ]]; do

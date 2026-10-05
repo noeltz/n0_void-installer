@@ -26,13 +26,12 @@ come from your dotfiles.
 ## Usage
 
 One-liner straight from the repo (you are root on the live ISO). The ISO
-ships neither a current xbps nor curl, and tools installed without a full
-sync crash against the ISO's older libraries ("symbol lookup error") — the
-first three commands fix all of that (install.sh also handles it itself if
-you transfer it another way):
+ships no curl, and installing packages onto its old userland can break them
+("symbol lookup error"), so this fetches install.sh with a self-consistent
+curl booted from a temporary xbps altroot (~100 MB RAM, no system changes):
 
 ```sh
-xbps-install -Syu xbps && xbps-install -Syu && xbps-install -Sy curl && bash <(curl -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
+xbps-install -Syu xbps && R=$(mktemp -d) && mkdir -p "$R/var/db/xbps/keys" && cp /var/db/xbps/keys/* "$R/var/db/xbps/keys/" && xbps-install -Sy -r "$R" curl && bash <("$R/usr/lib/ld-linux-x86-64.so.2" --library-path "$R/usr/lib" "$R/usr/bin/curl" -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
 ```
 
 Or download the script (and the SHA-256 checksum published next to it) on the

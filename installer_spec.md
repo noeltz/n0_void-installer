@@ -1,6 +1,6 @@
 # Void Linux Installer — Development Specification
 
-**Version:** 1.3 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl, its xbps needs a self-update first, and the live system needs a full sync to avoid library version skew)
+**Version:** 1.4 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl/dialog and an outdated xbps; host tools come from the ISO's own base-system, no live-system packages are installed — mixing repo packages onto the old ISO userland breaks them, and a full sync does not fit in the ISO's RAM-backed root)
 **Audience:** Senior developer implementing the installer. Nothing in this document is optional or open to interpretation unless it is explicitly marked *configurable*.
 **Language of the deliverable:** Bash.
 
@@ -51,6 +51,7 @@ The result is a **base system plus one user account**. No desktop environment, c
 | Form | One Bash script `install.sh` + one example config `install.conf.example` |
 | libc / arch | glibc / x86_64 only |
 | Install source | Official Void live ISO, network required, packages from mirror |
+| Live tools | None installed: the ISO's base-system provides all host tools (sfdisk partitions, not sgdisk); `dialog` installed on demand in interactive mode |
 | Firmware | UEFI only. Abort if `/sys/firmware/efi` does not exist |
 | Partitioning | Automatic, whole disk, GPT: 1 × ESP (1 GiB), 1 × btrfs (rest) |
 | Filesystem | btrfs, subvolumes `@ @home @snapshots @var_log @var_cache_xbps @var_tmp` |
@@ -112,16 +113,18 @@ The installer runs as **root** on the Void live ISO. The official ISO ships **ne
 | 6 | Network reachable (bash only, no external tools) | `timeout 10 bash -c "exec 3<>/dev/tcp/$HOST/443" 2>/dev/null` where `$HOST` is `$MIRROR` without `https://` and without any path | `No network connection to $MIRROR. Connect first and re-run.` |
 | 7 | RAM ≥ 1 GiB | `MemTotal` in `/proc/meminfo` ≥ 1048576 kB | `At least 1 GiB RAM required.` |
 
-After the checks, install the live-environment tools (one call, always, idempotent):
+After the checks, prepare the live environment. **No full live-system sync and no live-tools install**: a full sync needs more space (~2.5 GiB) than the ISO's RAM-backed root offers, and installing current repo packages onto the old ISO userland breaks binaries with `symbol lookup error` (both observed). Instead:
 
 ```bash
-xbps-install -Syu xbps          # update the package manager first (required by Void before other installs)
-xbps-install -Syu               # full live-system sync: freshly installed tools otherwise crash against the
-                                # ISO's older libraries with "symbol lookup error" (observed with curl)
-xbps-install -Sy dialog gptfdisk parted btrfs-progs dosfstools pciutils usbutils curl   # parted provides partprobe
+xbps-install -Syu xbps          # xbps self-update: an outdated xbps refuses all other transactions,
+                                # including the target bootstrap later
 ```
 
-If any of these commands fails → `Failed to install live tools.` exit 3.
+If this fails → `Failed to update xbps.` exit 3.
+
+Host tools are **not** installed. The ISO's base-system ships everything the installer executes on the host — `sfdisk`, `mkfs.btrfs`, `mkfs.vfat`, `lsblk`, `blkid`, `wipefs`, `udevadm`, `lspci`, `lsusb`, `loadkeys` — and that set is internally consistent. Each tool is verified with `command -v` and, where a benign call exists, executed (`--version`); a failure exits 3 with `Required tool not found on the live system: <t>` / `Required tool not usable on the live system: <t>`.
+
+`dialog` (interactive UI only, not on the ISO) is the single exception: in interactive mode, if missing it is installed with `xbps-install -Sy dialog` (failure → `Failed to install dialog.` exit 3) and then verified. The installer itself executes no curl at all; fetching install.sh is the README one-liner's job, which bootstraps a self-consistent curl inside a temporary xbps altroot (the same `-r` technique as the package probe in 10.1).
 
 ---
 
@@ -433,12 +436,15 @@ Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→
 umount -R /mnt 2>/dev/null || true
 swapoff -a
 wipefs -af "$TARGET_DISK"
-sgdisk --zap-all "$TARGET_DISK"
-sgdisk -n1:0:+1G -t1:ef00 -c1:EFI  "$TARGET_DISK"
-sgdisk -n2:0:0   -t2:8300 -c2:VOID "$TARGET_DISK"
-partprobe "$TARGET_DISK"
+sfdisk --wipe always "$TARGET_DISK" <<'EOF'
+label: gpt
+size=1GiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="VOID"
+EOF
 udevadm settle
 ```
+
+`sfdisk` (util-linux, shipped by the ISO) replaces `sgdisk`/`partprobe` (decision 24): GPT label, type GUIDs (`ef00` ≙ EFI System Partition, `8300` ≙ Linux filesystem) and partition names are equivalent, and sfdisk triggers the kernel partition-table reread itself.
 
 After `udevadm settle`, wait until both `$(part 1)` and `$(part 2)` exist as block devices (poll `[[ -b ... ]]` every 0.5 s, max 10 s; else fail).
 
@@ -925,7 +931,8 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 20. **Config is parsed, not sourced** (section 6).
 21. **Users are not added to the `network` group** (elogind + polkit grant NetworkManager access to local sessions).
 22. **Root recovery:** root is locked and `sudo` is the only escalation path. If the user's password is lost, recovery means booting the live ISO, mounting the subvolumes as in 10.4, chrooting and running `passwd`. The README MUST state this.
-23. **Self-healing preflight:** the live ISO ships neither `curl` nor a current `xbps`. Preflight therefore needs no external tool for its network check (bash `/dev/tcp`), updates `xbps` (`xbps-install -Syu xbps`) as the first live-tools action, runs a **full live-system sync** (`xbps-install -Syu`) — freshly installed tools otherwise crash against the ISO's older libraries with `symbol lookup error` (observed with curl) — and installs `curl` with the live tools. The README one-liner performs the same sequence before fetching; an `install.sh` transferred by any other means (USB, scp) self-heals.
+23. **Self-healing, zero-install preflight:** the live ISO ships no curl, no dialog and an outdated xbps. Preflight self-updates xbps, verifies the ISO's **native** tools instead of installing packages over the old userland (library skew → `symbol lookup error`; a full sync needs ~2.5 GiB and does not fit in the ISO's RAM-backed root), and uses bash `/dev/tcp` for the network check. `dialog` (not on the ISO) is installed on demand in interactive mode. The README one-liner bootstraps a self-consistent curl inside a temporary xbps altroot (`-r`, same technique as the package probe).
+24. **sfdisk instead of sgdisk:** partitioning uses util-linux `sfdisk`, shipped by the ISO — GPT label, type GUIDs and partition names equivalent to `sgdisk -n/-t/-c`, and it re-reads the partition table itself (no `partprobe`, no gptfdisk/parted install). The `udevadm settle` plus device-poll loop stays.
 
 ---
 
