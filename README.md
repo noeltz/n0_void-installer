@@ -25,10 +25,11 @@ come from your dotfiles.
 
 ## Usage
 
-One-liner straight from the repo (you are root on the live ISO):
+One-liner straight from the repo (you are root on the live ISO; installs
+curl first, which the ISO does not ship):
 
 ```sh
-bash <(curl -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
+xbps-install -Sy curl && bash <(curl -fL github.com/noeltz/n0_void-installer/raw/main/install.sh)
 ```
 
 Or download the script (and the SHA-256 checksum published next to it) on the
