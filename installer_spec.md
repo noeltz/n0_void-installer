@@ -118,9 +118,12 @@ After the checks, prepare the live environment. **No full live-system sync and n
 ```bash
 xbps-install -Syu xbps          # xbps self-update: an outdated xbps refuses all other transactions,
                                 # including the target bootstrap later
+xbps-query -R --repository="$MIRROR/current" base-system   # canary: the repository must be readable
 ```
 
-If this fails → `Failed to update xbps.` exit 3.
+The Void repositories moved to a **flat layout** in October 2026 (`/current/x86_64-repodata` instead of `/current/x86_64/x86_64-repodata`); an xbps from before that change cannot read the new layout and every package fails with "not found in repository pool". The canary query makes such a mismatch fail in preflight, before anything else runs.
+
+If the self-update fails → `Failed to update xbps. If the mirror changed layout recently, this ISO's xbps may be too old to read it; use a newer ISO.` exit 3. If the canary fails → `Repository $MIRROR/current is not readable by this xbps (layout mismatch or mirror problem). Use a newer live ISO or another MIRROR.` exit 3.
 
 Host tools are **not** installed. The ISO's base-system ships everything the installer executes on the host — `sfdisk`, `mkfs.btrfs`, `mkfs.vfat`, `lsblk`, `blkid`, `wipefs`, `udevadm`, `lspci`, `lsusb`, `loadkeys` — and that set is internally consistent. Each tool is verified with `command -v` and, where a benign call exists, executed (`--version`); a failure exits 3 with `Required tool not found on the live system: <t>` / `Required tool not usable on the live system: <t>`.
 

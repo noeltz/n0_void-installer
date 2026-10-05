@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.1.1"
+INSTALLER_VERSION="1.2.0"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -396,7 +396,17 @@ preflight() {
   # xbps self-update: an outdated xbps refuses all other transactions
   # ("xbps must be updated"), including the target bootstrap later.
   if ! xbps-install -Syu xbps; then
-    echo "Failed to update xbps." >&2
+    echo "Failed to update xbps. If the mirror changed layout recently, this ISO's xbps may be too old to read it; use a newer ISO." >&2
+    exit 3
+  fi
+
+  # The repositories moved to a flat layout (/current/x86_64-repodata instead
+  # of /current/x86_64/x86_64-repodata) in October 2026; an xbps from before
+  # that change cannot read the new layout and every package would fail with
+  # "not found in repository pool". A canary query makes that fail here, with
+  # an actionable message, before anything else runs.
+  if ! xbps-query -R --repository="$MIRROR/current" base-system >/dev/null 2>&1; then
+    echo "Repository $MIRROR/current is not readable by this xbps (layout mismatch or mirror problem). Use a newer live ISO or another MIRROR." >&2
     exit 3
   fi
 
