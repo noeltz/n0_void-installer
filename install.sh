@@ -184,9 +184,10 @@ validate_one() {
       fi
       ;;
     LOCALE)
+      esc=$(locale_key "$val")
       esc=${esc//./\\.}
-      if ! grep -qE "^#?${esc} UTF-8$" /etc/default/libc-locales 2>/dev/null; then
-        VALIDATE_REASON="not available in /etc/default/libc-locales"
+      if ! grep -qiE "^#?[[:space:]]*${esc}[[:space:]]+UTF-8$" /etc/default/libc-locales 2>/dev/null; then
+        VALIDATE_REASON="not available in /etc/default/libc-locales (e.g. en_US.UTF-8)"
         return 1
       fi
       ;;
@@ -234,7 +235,38 @@ validate_one() {
   return 0
 }
 
+# Normalise a locale name for comparison: lowercase, and treat ".utf8" the
+# same as ".utf-8" (glibc accepts both spellings of the UTF-8 codeset).
+locale_key() {  # $1 = locale name; echoes normalised form
+  local k=${1,,}
+  if [[ $k == *.utf8 ]]; then
+    k=${k%.utf8}.utf-8
+  fi
+  printf '%s' "$k"
+}
+
+# glibc locale names are case-sensitive (en_US.UTF-8). Accept user input in
+# any case and rewrite it to the canonical spelling from libc-locales
+# (en_us.utf8 -> en_US.UTF-8). Validation itself is validate_one's job.
+canonicalize_locale() {
+  local line canonical
+  [[ -n ${LOCALE:-} ]] || return 0
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    line=${line#\#}
+    line=${line#"${line%%[![:space:]]*}"}   # trim whitespace after the comment marker
+    canonical=${line%% *}
+    [[ -n $canonical ]] || continue
+    if [[ $(locale_key "$canonical") == "$(locale_key "$LOCALE")" ]]; then
+      LOCALE=$canonical
+      return 0
+    fi
+  done < /etc/default/libc-locales
+  return 0
+}
+
 validate_all() {
+  canonicalize_locale
   local key
   for key in HOSTNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_REPO \
              EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
@@ -922,11 +954,11 @@ configure_system() {
     printf 'KEYMAP="%s"\n' "$KEYMAP" >> /mnt/etc/rc.conf
   fi
 
-  if ! grep -qE "^#?${locale_esc} UTF-8$" /mnt/etc/default/libc-locales; then
+  if ! grep -qiE "^#?[[:space:]]*${locale_esc}[[:space:]]+UTF-8$" /mnt/etc/default/libc-locales; then
     echo "Locale not available: $LOCALE" >&2
     exit 2
   fi
-  sed -i -E "s|^#(${locale_esc} UTF-8)|\1|" /mnt/etc/default/libc-locales
+  sed -i -E "s|^#[[:space:]]*(${locale_esc}[[:space:]]+UTF-8)|\1|" /mnt/etc/default/libc-locales
   echo "LANG=$LOCALE" > /mnt/etc/locale.conf
   chroot /mnt xbps-reconfigure -f glibc-locales
 

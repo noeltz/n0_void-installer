@@ -176,7 +176,7 @@ Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6
 | `USER_PASSWORD_HASH` | yes¹ | — | begins with `$6$` (SHA-512 crypt) | no |
 | `USER_SHELL` | no | `/bin/bash` | must be `/bin/bash` in v1 | no |
 | `TIMEZONE` | no | `UTC` | file `/usr/share/zoneinfo/$TIMEZONE` exists | yes (default prefilled) |
-| `LOCALE` | no | `en_US.UTF-8` | line `#$LOCALE UTF-8` or `$LOCALE UTF-8` exists in `/etc/default/libc-locales` of the target (checked after bootstrap; preliminary check against the same file on the live system) | yes (default prefilled) |
+| `LOCALE` | no | `en_US.UTF-8` | line `#$LOCALE UTF-8` or `$LOCALE UTF-8` exists in `/etc/default/libc-locales` of the target (checked after bootstrap; preliminary check against the same file on the live system). The check is case-insensitive and accepts `.utf8` as a spelling of `.UTF-8`; the value is canonicalised to the spelling found in the file (`en_us.utf8` → `en_US.UTF-8`). Only genuinely unavailable locales are rejected | yes (default prefilled) |
 | `KEYMAP` | no | `us` | `loadkeys --parse "$KEYMAP" >/dev/null 2>&1` succeeds on the live system (parse only, does not change the live keymap) | yes (default prefilled) |
 | `MIRROR` | no | `https://repo-default.voidlinux.org` | URL beginning `https://`, **no trailing slash, no `/current`** | no |
 | `SWAP` | no | `zram` | `zram` or `none` | no |
