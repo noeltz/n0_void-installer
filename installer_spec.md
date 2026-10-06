@@ -431,15 +431,34 @@ offending package(s). `rc != 0` → print `Package check failed (a package may b
 **`-M` (memory-sync) is required**: repository queries would otherwise read
 the (possibly-empty) on-disk cache instead of the live mirror.
 
-**Service probe (same function, directly after the package probe).** For every
-(package, service) pair marked *fatal* in 10.10 that applies to this machine,
-verify the package ships the service directory:
+**Service probe (same function, directly after the package probe).**
+
+For every (package, service) pair marked *fatal* in 10.10 that applies to this machine (except NetworkManager, which is handled separately), verify the package ships the service directory:
 
 ```bash
 xbps-query -R -M --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"
 ```
 
-Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→`polkitd`, `NetworkManager`→`NetworkManager`, `chrony`→`chronyd`, `acpid`→`acpid`, `grub-btrfs`→`grub-btrfs`, `zramen`→`zramen` (if `SWAP=zram`). A miss → print `Package <pkg> does not provide service <svc>.` and exit 3. The runit service ships with the main `grub-btrfs` package since 4.x (`grub-btrfs-runit` is an empty transitional package, still installed for compatibility). If `grub-btrfs` does not ship a `grub-btrfs` service directory, the implementation MUST ship its own runit service (heredoc, `run` script: `#!/bin/sh` followed by `exec grub-btrfsd /.snapshots` — no `--syslog`, because v1 installs no syslog daemon (decision 18)) instead of failing; the probe result decides which path is used. Optional services (10.10) are not probed.
+Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→`polkitd`, `chrony`→`chronyd`, `acpid`→`acpid`, `zramen`→`zramen` (if `SWAP=zram`). A miss → print `Package <pkg> does not provide service <svc>.` and exit 3.
+
+**NetworkManager service handling.** Unlike other fatal services, NetworkManager's runit service is handled separately to make the installer robust to variations in the Void repository:
+
+- In step 7 (`probe_packages()`), the probe checks if the NetworkManager package ships `etc/sv/NetworkManager`.
+- If the package provides the service, the installer uses it (standard behavior).
+- If the package does **not** provide the service (as observed in some Void releases), the installer ships its own NetworkManager runit service directory (`/mnt/etc/sv/NetworkManager/` with a `run` script) before enabling services.
+
+The NetworkManager runit service script:
+
+```bash
+#!/bin/sh
+exec 2>&1
+sv check dbus >/dev/null || exit 1
+exec NetworkManager -n >/dev/null 2>&1
+```
+
+This follows the same pattern as `grub-btrfs` (section 10.1), ensuring the installer can always enable the NetworkManager service regardless of what the package provides.
+
+**Grub-btrfs service handling.** If the `grub-btrfs` package does not ship a `grub-btrfs` service directory, the implementation MUST ship its own runit service (heredoc, `run` script: `#!/bin/sh` followed by `exec grub-btrfsd /.snapshots` — no `--syslog`, because v1 installs no syslog daemon (decision 18)) instead of failing; the probe result decides which path is used. Optional services (10.10) are not probed.
 
 ### 10.2 Step 9 — partitioning (destructive)
 
@@ -669,6 +688,8 @@ enable_sv() {  # $1 = service, $2 = fatal|optional
 | `bluetoothd` | optional | Bluetooth present |
 
 `dhcpcd`, `wpa_supplicant` and any other network service MUST NOT be linked.
+
+**NetworkManager service handling:** The installer follows the same pattern as `grub-btrfs` (section 10.1). In step 7 (`probe_packages()`), it checks if the `NetworkManager` package provides a runit service directory (`etc/sv/NetworkManager`). If the package lacks this directory (as observed in some Void releases/repos), the installer creates its own service directory at `/mnt/etc/sv/NetworkManager/` with a standard run script before enabling services. This ensures the NetworkManager service is always available for the target system regardless of the package contents.
 
 ### 10.11 User creation (`create_user`, in chroot)
 

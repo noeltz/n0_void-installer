@@ -15,6 +15,7 @@ INSTALLER_VERSION="1.3.0"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
+NETWORKMANAGER_OWN=0         # set by probe_packages when NetworkManager ships no service dir
 CHEZMOI_FAILED=0
 CURRENT_STEP_N=0
 CURRENT_STEP_NAME="startup"
@@ -689,7 +690,7 @@ probe_packages() {
     fi
   done
 
-  local -a pairs=(dbus:dbus elogind:elogind polkit:polkitd NetworkManager:NetworkManager \
+  local -a pairs=(dbus:dbus elogind:elogind polkit:polkitd \
                   chrony:chronyd acpid:acpid)
   if [[ $SWAP == zram ]]; then
     pairs+=(zramen:zramen)
@@ -705,6 +706,15 @@ probe_packages() {
     echo "Package $pkg does not provide service $svc." >&2
     exit 3
   done
+
+  # NetworkManager: ship our own runit service if the package does not
+  # provide one (verified on some Void releases/repos where the service
+  # directory is absent from the binary package).
+  if xbps-query -R -M --repository="$MIRROR/current" -f NetworkManager | grep -q "etc/sv/NetworkManager"; then
+    NETWORKMANAGER_OWN=0
+  else
+    NETWORKMANAGER_OWN=1
+  fi
 
   # The grub-btrfs runit service ships with the main grub-btrfs package
   # (grub-btrfs-runit is an empty transitional package). If neither ships a
@@ -1133,6 +1143,16 @@ enable_services() {
 exec grub-btrfsd /.snapshots
 EOF
     chmod 0755 /mnt/etc/sv/grub-btrfs/run
+  fi
+  if (( NETWORKMANAGER_OWN == 1 )); then
+    mkdir -p /mnt/etc/sv/NetworkManager
+    cat > /mnt/etc/sv/NetworkManager/run <<'EOF'
+#!/bin/sh
+exec 2>&1
+sv check dbus >/dev/null || exit 1
+exec NetworkManager -n >/dev/null 2>&1
+EOF
+    chmod 0755 /mnt/etc/sv/NetworkManager/run
   fi
   for svc in "${SV_FATAL[@]}"; do
     enable_sv "$svc" fatal
