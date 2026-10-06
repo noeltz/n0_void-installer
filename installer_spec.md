@@ -1,6 +1,6 @@
 # Void Linux Installer — Development Specification
 
-**Version:** 1.4 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl/dialog and an outdated xbps; host tools come from the ISO's own base-system, no live-system packages are installed — mixing repo packages onto the old ISO userland breaks them, and a full sync does not fit in the ISO's RAM-backed root)
+**Version:** 1.5 (draft for implementation; incorporates review findings and live-ISO realities: the ISO ships no curl/dialog and an outdated xbps; host tools come from the ISO's own base-system, no live-system packages are installed — mixing repo packages onto the old ISO userland breaks them, and a full sync does not fit in the ISO's RAM-backed root)
 **Audience:** Senior developer implementing the installer. Nothing in this document is optional or open to interpretation unless it is explicitly marked *configurable*.
 **Language of the deliverable:** Bash.
 
@@ -10,7 +10,7 @@
 
 - **MUST / MUST NOT** are binary requirements. **MAY** marks an explicitly allowed variation.
 - Every command shown is the exact command to run (variables in `$UPPER_CASE` are defined in section 6 or section 9).
-- Package and service names were researched against the Void repositories. Because names can change, the installer MUST validate every package name **and every fatal service directory** against the mirror **before** touching any disk (section 10.1). A renamed package or a missing service therefore fails safely, before any destructive action. (Optional hardware services are checked after install and only warn.)
+- Package and service names were researched against the Void repositories. Because names can change, the installer MUST validate every package name **and every fatal service directory** against the mirror **before** touching any disk (section 10.1). A renamed package or a missing service therefore fails safely, before any destructive action. (Optional hardware services are checked after install and only warn.) **Full dependency resolution and disk-space validation runs against the mounted target `/mnt` in step 11, after the filesystem is created.**
 - Section 16 lists decisions the author made beyond the customer's answers. They are fixed for v1, but are collected in one place so they can be changed deliberately.
 
 ---
@@ -399,11 +399,11 @@ Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and 
 | 4 | `build_package_lists` | Section 8.2 |
 | 5 | `choose_disk`, `prompt_missing` | Sections 6, 7.1 (interactive mode only) |
 | 6 | `validate_all` | Validate every variable (section 6). First error → exit 2 |
-| 7 | `probe_packages` | Dry-run all packages against the mirror (10.1) |
+| 7 | `probe_packages` | Lightweight package/service probe (10.1) |
 | 8 | `confirm` | Section 7.2 |
 | 9 | `partition_disk` | 10.2 |
 | 10 | `format_disk`, `mount_layout` | 10.3, 10.4 |
-| 11 | `bootstrap_system` (prepare) | 10.5 |
+| 11 | `bootstrap_system` (prepare) | 10.5 (includes full validation against /mnt) |
 | 12 | `bootstrap_system` (install) | 10.6 |
 | 13 | `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user` | Sections 10.7–10.11 |
 | 14 | `apply_chezmoi` | Section 13 |
@@ -412,23 +412,28 @@ Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and 
 
 ### 10.1 Step 7 — package probe
 
-Create a temporary empty root and ask xbps to resolve everything without installing:
+Lightweight package-availability and service-file checks against the mirror.
+No dry-run installation is performed; the full transaction validation runs
+later against the disk-backed `/mnt` (step 11).
+
+**Package availability check.** One batched `xbps-query` with `-M` (memory-sync)
+fetches repodata into RAM and verifies every package in `PKGS_ALL` exists
+in the configured repositories:
 
 ```bash
-PROBE=$(mktemp -d)
-mkdir -p "$PROBE/var/db/xbps/keys" "$PROBE/etc/xbps.d"
-cp /var/db/xbps/keys/* "$PROBE/var/db/xbps/keys/"
-XBPS_ARCH=x86_64 xbps-install -M -n -y -S -r "$PROBE" \
-  -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
+xbps-query -R -M --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" \
   "${PKGS_ALL[@]}"
-rc=$?; rm -rf "$PROBE"
 ```
 
-`rc != 0` → print `Package check failed (a package may be missing or renamed). See output above.` and exit 3. Nothing has been modified on the target disk at this point.
+Any missing or renamed package causes non-zero exit; stderr names the
+offending package(s). `rc != 0` → print `Package check failed (a package may be missing or renamed). See output above.` and exit 3. Nothing has been modified on the target disk at this point.
 
-**`-M` (memory-sync) is required**: a dry-run (`-n`) does not persist the repository sync, so on a fresh root the pool would be empty and every package would fail with `not found in repository pool` (verified against xbps 0.60.7). The same flag is passed to every `xbps-query -R` repository query, which otherwise reads the possibly-empty on-disk cache.
+**`-M` (memory-sync) is required**: repository queries would otherwise read
+the (possibly-empty) on-disk cache instead of the live mirror.
 
-**Service probe (same function, directly after the package probe).** For every (package, service) pair marked *fatal* in 10.10 that applies to this machine, verify the package ships the service directory:
+**Service probe (same function, directly after the package probe).** For every
+(package, service) pair marked *fatal* in 10.10 that applies to this machine,
+verify the package ships the service directory:
 
 ```bash
 xbps-query -R -M --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"
@@ -440,7 +445,18 @@ Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→
 
 ```bash
 umount -R /mnt 2>/dev/null || true
-swapoff -a
+
+# Targeted swapoff: only deactivate swap on the target disk.
+# swapoff -a would take down unrelated system swap (other disks, zram).
+# Match partitions of TARGET_DISK: /dev/sdaN, /dev/nvme0n1pN, /dev/mmcblk0pN, etc.
+local swdev
+while IFS= read -r swdev; do
+  case $swdev in
+    "$TARGET_DISK"[0-9]*|"$TARGET_DISK"p[0-9]*)
+      swapoff "$swdev" || true ;;
+  esac
+done < <(awk 'NR>1{print $1}' /proc/swaps)
+
 wipefs -af "$TARGET_DISK"
 sfdisk --wipe always "$TARGET_DISK" <<'EOF'
 label: gpt
@@ -490,10 +506,27 @@ mkdir -p /mnt/var/db/xbps/keys
 cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
 ```
 
+**Full dependency + disk-space validation against `/mnt`.** After keys are copied,
+run a dry-run of the complete transaction against the mounted target filesystem.
+This uses `-n` (dry-run) **without** `-M` so repodata is persisted to
+`/mnt/var/db/xbps` (identical to the real install), and an explicit `--cachedir`
+on the disk-backed `@var_cache_xbps` subvolume:
+
+```bash
+XBPS_ARCH=x86_64 xbps-install -n -y -S -r /mnt \
+  --cachedir /mnt/var/cache/xbps \
+  -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
+  "${PKGS_ALL[@]}"
+```
+
+On failure: print `Dependency/disk-space validation against /mnt failed. See output above.` and exit 1 (the disk has already been wiped at this point; exit 3 no longer applies). On success: fall through to step 12.
+
 ### 10.6 Step 12 — install packages
 
 ```bash
+TMPDIR=/mnt/var/tmp \
 XBPS_ARCH=x86_64 xbps-install -S -y -r /mnt \
+  --cachedir /mnt/var/cache/xbps \
   -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
   "${PKGS_ALL[@]}"
 ```
@@ -517,6 +550,8 @@ cp /etc/resolv.conf /mnt/etc/resolv.conf
 ```
 
 All commands in 10.7–10.11 and 13 run **in the chroot** via `chroot /mnt /bin/bash -c '<commands>'` unless marked *(host)*.
+
+**Explicit disk-backed I/O:** `TMPDIR=/mnt/var/tmp` ensures any xbps temporary files land on the `@var_tmp` subvolume. `--cachedir /mnt/var/cache/xbps` explicitly directs package downloads to the `@var_cache_xbps` subvolume. Both are mounted btrfs subvolumes on the target disk, avoiding the live ISO's RAM-backed tmpfs.
 
 ### 10.7 System configuration
 
@@ -832,7 +867,7 @@ Rationale: bootstrap scripts may assume a running system (running runit, session
 
 ## 14. Safety rules (binding)
 
-1. Nothing destructive happens before the confirmation (interactive) or before step 9 (`--yes`). The probe in step 7 guarantees packages resolve before the disk is wiped.
+1. Nothing destructive happens before the confirmation (interactive) or before step 9 (`--yes`). The probe in step 7 guarantees packages resolve before the disk is wiped. Full dependency and disk-space validation runs in step 11 against the mounted target.
 2. The target disk is never chosen automatically and never from a default.
 3. Only whole-disk install exists; the script MUST NOT touch any other disk.
 4. Secrets (passwords) are never written to disk by the installer outside `/etc/shadow` (via `chpasswd`), never echoed, never in the process list.
@@ -868,6 +903,7 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-5 | `--yes --config install.conf` fully specified | unattended install, same result as T-3 |
 | T-6 | `--yes` with `USERNAME` missing | exit 2, message `Missing required setting: USERNAME` |
 | T-7 | `EXTRA_PACKAGES="doesnotexist"` | exit 3 at step 7, disk unchanged |
+| T-7b | Disk too small for package set (e.g., 21 GiB disk, full package list) | exit 1 at step 11, actionable message about disk space |
 | T-8 | After first boot: checklist from section 11 | all items true |
 | T-9 | `command -v xbps-install` as user and in `sudo sh -c 'command -v xbps-install'` | both print `/usr/local/bin/xbps-install` |
 | T-9b | `lsattr -d /boot` and `findmnt -no OPTIONS /` | no special `/boot` handling is required: root is mounted with `compress=zstd:1` and GRUB boots (see decision 17) |
@@ -947,6 +983,6 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 The installer is accepted when:
 
 - ShellCheck is clean;
-- all tests T-1 … T-20 pass in QEMU;
+- all tests T-1 … T-21 pass in QEMU;
 - all tests L-1 … L-10 that apply to the available hardware pass on the laptop;
 - a developer other than the author can reproduce a bootable system from this document alone without making any design decision that is not written here.

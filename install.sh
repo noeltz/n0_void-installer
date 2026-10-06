@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.2.1"
+INSTALLER_VERSION="1.3.0"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -676,20 +676,13 @@ build_package_lists() {
 # --------------------------------------------------------------------------
 
 probe_packages() {
-  local probe rc pkg svc
-  probe=$(mktemp -d)
-  mkdir -p "$probe/var/db/xbps/keys" "$probe/etc/xbps.d"
-  cp /var/db/xbps/keys/* "$probe/var/db/xbps/keys/"
-  # -M (memory-sync): a dry-run (-n) does not persist the repository sync, so
-  # on a fresh root the pool would be empty and every package would fail with
-  # "not found in repository pool". Memory-sync fetches repodata into RAM
-  # for the resolution instead (verified against xbps 0.60.7).
-  rc=0
-  XBPS_ARCH=x86_64 xbps-install -M -n -y -S -r "$probe" \
-    -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
-    "${PKGS_ALL[@]}" || rc=$?
-  rm -rf "$probe"
-  if (( rc != 0 )); then
+  local pkg svc
+
+  # Lightweight package availability check: batched xbps-query with -M (memory-sync)
+  # to fetch repodata into RAM. Any missing/renamed package causes non-zero exit;
+  # stderr output names the offending package(s).
+  if ! xbps-query -R -M --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" \
+       "${PKGS_ALL[@]}" >/dev/null; then
     echo "Package check failed (a package may be missing or renamed). See output above." >&2
     exit 3
   fi
@@ -910,7 +903,18 @@ part() {  # $1 = partition number
 
 partition_disk() {
   umount -R /mnt 2>/dev/null || true
-  swapoff -a
+
+  # Targeted swapoff: only deactivate swap on the target disk.
+  # swapoff -a would take down unrelated system swap (other disks, zram).
+  # Match partitions of TARGET_DISK: /dev/sdaN, /dev/nvme0n1pN, /dev/mmcblk0pN, etc.
+  local swdev
+  while IFS= read -r swdev; do
+    case $swdev in
+      "$TARGET_DISK"[0-9]*|"$TARGET_DISK"p[0-9]*)
+        swapoff "$swdev" || true ;;
+    esac
+  done < <(awk 'NR>1{print $1}' /proc/swaps)
+
   wipefs -af "$TARGET_DISK"
   # sfdisk (util-linux, shipped by the ISO) replaces sgdisk: GPT label,
   # type GUIDs and partition names. It re-reads the partition table itself,
@@ -968,9 +972,25 @@ bootstrap_system() {
     prepare)
       mkdir -p /mnt/var/db/xbps/keys
       cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
+
+      # Full dependency + disk-space validation against the mounted target.
+      # Runs a dry-run (-n) without -M so repodata is persisted to
+      # /mnt/var/db/xbps (same as the real transaction). Uses explicit
+      # --cachedir on the disk-backed @var_cache_xbps subvolume.
+      local rc=0
+      XBPS_ARCH=x86_64 xbps-install -n -y -S -r /mnt \
+        --cachedir /mnt/var/cache/xbps \
+        -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
+        "${PKGS_ALL[@]}" || rc=$?
+      if (( rc != 0 )); then
+        echo "Dependency/disk-space validation against /mnt failed. See output above." >&2
+        exit 1
+      fi
       ;;
     install)
+      TMPDIR=/mnt/var/tmp \
       XBPS_ARCH=x86_64 xbps-install -S -y -r /mnt \
+        --cachedir /mnt/var/cache/xbps \
         -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
         "${PKGS_ALL[@]}"
       if [[ $MIRROR != https://repo-default.voidlinux.org ]]; then
