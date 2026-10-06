@@ -678,14 +678,16 @@ build_package_lists() {
 probe_packages() {
   local pkg svc
 
-  # Lightweight package availability check: batched xbps-query with -M (memory-sync)
-  # to fetch repodata into RAM. Any missing/renamed package causes non-zero exit;
-  # stderr output names the offending package(s).
-  if ! xbps-query -R -M --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" \
-       "${PKGS_ALL[@]}" >/dev/null; then
-    echo "Package check failed (a package may be missing or renamed). See output above." >&2
-    exit 3
-  fi
+  # Lightweight package availability check: one xbps-query per package
+  # (xbps-query accepts only a single package argument; batched call fails
+  # with "too many arguments"). Each call uses -M to fetch repodata into RAM.
+  for pkg in "${PKGS_ALL[@]}"; do
+    if ! xbps-query -R -M --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" \
+         "$pkg" >/dev/null; then
+      echo "Package not found in repository: $pkg" >&2
+      exit 3
+    fi
+  done
 
   local -a pairs=(dbus:dbus elogind:elogind polkit:polkitd NetworkManager:NetworkManager \
                   chrony:chronyd acpid:acpid)
