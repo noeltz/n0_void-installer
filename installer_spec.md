@@ -118,7 +118,7 @@ After the checks, prepare the live environment. **No full live-system sync and n
 ```bash
 xbps-install -Syu xbps          # xbps self-update: an outdated xbps refuses all other transactions,
                                 # including the target bootstrap later
-xbps-query -R --repository="$MIRROR/current" base-system   # canary: the repository must be readable
+xbps-query -R -M --repository="$MIRROR/current" base-system   # canary: the repository must be readable
 ```
 
 The Void repositories moved to a **flat layout** in October 2026 (`/current/x86_64-repodata` instead of `/current/x86_64/x86_64-repodata`); an xbps from before that change cannot read the new layout and every package fails with "not found in repository pool". The canary query makes such a mismatch fail in preflight, before anything else runs.
@@ -308,13 +308,13 @@ The function builds **one array**, `PKGS_ALL` (de-duplicated). xbps resolves eac
 | CPU **or** GPU intel | `linux-firmware-intel` | — | — |
 | CPU **or** GPU amd | `linux-firmware-amd` | — | — |
 | GPU intel | `mesa-dri` `vulkan-loader` `mesa-vulkan-intel` `intel-video-accel` `intel-media-driver` | — | — |
-| GPU amd | `mesa-dri` `vulkan-loader` `mesa-vulkan-radeon` `mesa-vaapi` `mesa-vdpau` | — | — |
+| GPU amd | `mesa-dri` `vulkan-loader` `mesa-vulkan-radeon` `mesa-vaapi` `libva-vdpau-driver` | — | — |
 | GPU nvidia | `mesa-dri` `vulkan-loader` `mesa-nouveau-dri` (nouveau; no proprietary driver) | — | — |
 | GPU virtual (VM) | `mesa-dri` | — | — |
 | Intel CPU **and** chassis laptop/desktop | `sof-firmware` | — | — |
 | chassis `laptop` | `tlp` `upower` `brightnessctl` `iw` | — | `tlp` `upower` |
 | VM type `qemu` | `qemu-ga` `spice-vdagent` | — | `qemu-ga` `spice-vdagentd` |
-| Touchscreen | `libinput` `libinput-tools` | — | — |
+| Touchscreen | `libinput` (the CLI tools ship inside it) | — | — |
 | Convertible/tablet **or** touchscreen on laptop | `iio-sensor-proxy` | — | `iio-sensor-proxy` |
 | Fingerprint | `fprintd` `libfprint` | — | — (fprintd is D-Bus activated) |
 | Bluetooth | `bluez` | — | `bluetoothd` |
@@ -418,7 +418,7 @@ Create a temporary empty root and ask xbps to resolve everything without install
 PROBE=$(mktemp -d)
 mkdir -p "$PROBE/var/db/xbps/keys" "$PROBE/etc/xbps.d"
 cp /var/db/xbps/keys/* "$PROBE/var/db/xbps/keys/"
-XBPS_ARCH=x86_64 xbps-install -n -y -S -r "$PROBE" \
+XBPS_ARCH=x86_64 xbps-install -M -n -y -S -r "$PROBE" \
   -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
   "${PKGS_ALL[@]}"
 rc=$?; rm -rf "$PROBE"
@@ -426,13 +426,15 @@ rc=$?; rm -rf "$PROBE"
 
 `rc != 0` → print `Package check failed (a package may be missing or renamed). See output above.` and exit 3. Nothing has been modified on the target disk at this point.
 
+**`-M` (memory-sync) is required**: a dry-run (`-n`) does not persist the repository sync, so on a fresh root the pool would be empty and every package would fail with `not found in repository pool` (verified against xbps 0.60.7). The same flag is passed to every `xbps-query -R` repository query, which otherwise reads the possibly-empty on-disk cache.
+
 **Service probe (same function, directly after the package probe).** For every (package, service) pair marked *fatal* in 10.10 that applies to this machine, verify the package ships the service directory:
 
 ```bash
-xbps-query -R --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"
+xbps-query -R -M --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"
 ```
 
-Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→`polkitd`, `NetworkManager`→`NetworkManager`, `chrony`→`chronyd`, `acpid`→`acpid`, `grub-btrfs-runit`→`grub-btrfs`, `zramen`→`zramen` (if `SWAP=zram`). A miss → print `Package <pkg> does not provide service <svc>.` and exit 3. If `grub-btrfs-runit` does not ship a `grub-btrfs` service directory, the implementation MUST ship its own runit service (heredoc, `run` script: `#!/bin/sh` followed by `exec grub-btrfsd /.snapshots` — no `--syslog`, because v1 installs no syslog daemon (decision 18)) instead of failing; the probe result decides which path is used. Optional services (10.10) are not probed.
+Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→`polkitd`, `NetworkManager`→`NetworkManager`, `chrony`→`chronyd`, `acpid`→`acpid`, `grub-btrfs`→`grub-btrfs`, `zramen`→`zramen` (if `SWAP=zram`). A miss → print `Package <pkg> does not provide service <svc>.` and exit 3. The runit service ships with the main `grub-btrfs` package since 4.x (`grub-btrfs-runit` is an empty transitional package, still installed for compatibility). If `grub-btrfs` does not ship a `grub-btrfs` service directory, the implementation MUST ship its own runit service (heredoc, `run` script: `#!/bin/sh` followed by `exec grub-btrfsd /.snapshots` — no `--syslog`, because v1 installs no syslog daemon (decision 18)) instead of failing; the probe result decides which path is used. Optional services (10.10) are not probed.
 
 ### 10.2 Step 9 — partitioning (destructive)
 

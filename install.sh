@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.2.0"
+INSTALLER_VERSION="1.2.1"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -405,7 +405,7 @@ preflight() {
   # that change cannot read the new layout and every package would fail with
   # "not found in repository pool". A canary query makes that fail here, with
   # an actionable message, before anything else runs.
-  if ! xbps-query -R --repository="$MIRROR/current" base-system >/dev/null 2>&1; then
+  if ! xbps-query -R -M --repository="$MIRROR/current" base-system >/dev/null 2>&1; then
     echo "Repository $MIRROR/current is not readable by this xbps (layout mismatch or mirror problem). Use a newer live ISO or another MIRROR." >&2
     exit 3
   fi
@@ -619,7 +619,9 @@ build_package_lists() {
     done
   fi
   if [[ $HW_GPUS == *amd* ]]; then
-    for p in mesa-dri vulkan-loader mesa-vulkan-radeon mesa-vaapi mesa-vdpau; do
+    # mesa-vdpau no longer exists (dropped from Void's mesa packaging); VA-API
+    # is the video decode path, libva-vdpau-driver bridges legacy VDPAU apps.
+    for p in mesa-dri vulkan-loader mesa-vulkan-radeon mesa-vaapi libva-vdpau-driver; do
       pkg_add "$p"
     done
   fi
@@ -646,8 +648,8 @@ build_package_lists() {
     SV_OPTIONAL+=(qemu-ga spice-vdagentd)
   fi
   if [[ $HW_TOUCH_RESULT == yes ]]; then
+    # the libinput CLI tools ship inside the libinput package itself
     pkg_add libinput
-    pkg_add libinput-tools
   fi
   if [[ $HW_CONVERTIBLE == yes || ( $HW_TOUCH_RESULT == yes && $HW_CHASSIS_RESULT == laptop ) ]]; then
     pkg_add iio-sensor-proxy
@@ -678,8 +680,12 @@ probe_packages() {
   probe=$(mktemp -d)
   mkdir -p "$probe/var/db/xbps/keys" "$probe/etc/xbps.d"
   cp /var/db/xbps/keys/* "$probe/var/db/xbps/keys/"
+  # -M (memory-sync): a dry-run (-n) does not persist the repository sync, so
+  # on a fresh root the pool would be empty and every package would fail with
+  # "not found in repository pool". Memory-sync fetches repodata into RAM
+  # for the resolution instead (verified against xbps 0.60.7).
   rc=0
-  XBPS_ARCH=x86_64 xbps-install -n -y -S -r "$probe" \
+  XBPS_ARCH=x86_64 xbps-install -M -n -y -S -r "$probe" \
     -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
     "${PKGS_ALL[@]}" || rc=$?
   rm -rf "$probe"
@@ -693,19 +699,23 @@ probe_packages() {
   if [[ $SWAP == zram ]]; then
     pairs+=(zramen:zramen)
   fi
+  # -M everywhere: repository queries would otherwise read the (possibly
+  # empty) on-disk cache instead of the live mirror.
   for svc in "${pairs[@]}"; do
     pkg=${svc%%:*}
     svc=${svc##*:}
-    if xbps-query -R --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"; then
+    if xbps-query -R -M --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"; then
       continue
     fi
     echo "Package $pkg does not provide service $svc." >&2
     exit 3
   done
 
-  # grub-btrfs-runit: if the package ships no grub-btrfs service directory we
-  # provide our own run script instead of failing (spec 10.1).
-  if xbps-query -R --repository="$MIRROR/current" -f grub-btrfs-runit | grep -q "etc/sv/grub-btrfs"; then
+  # The grub-btrfs runit service ships with the main grub-btrfs package
+  # (grub-btrfs-runit is an empty transitional package). If neither ships a
+  # grub-btrfs service directory we provide our own run script instead of
+  # failing (spec 10.1).
+  if xbps-query -R -M --repository="$MIRROR/current" -f grub-btrfs | grep -q "etc/sv/grub-btrfs"; then
     GRUB_BTRFS_OWN=0
   else
     GRUB_BTRFS_OWN=1
