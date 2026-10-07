@@ -603,7 +603,7 @@ preflight() {
     exit 3
   fi
   local secureboot_status
-  secureboot_status=$(secure_boot_status)
+  secureboot_status=$(secure_boot_status /sys/firmware/efi/efivars)
   if [[ $secureboot_status == enabled ]]; then
     echo "Secure Boot is enabled. Disable Secure Boot in firmware; signed boot is not supported." >&2
     exit 3
@@ -2732,8 +2732,8 @@ validate_target_installation() {
     echo "Installed sudo configuration failed validation." >&2
     return 1
   fi
-  validate_desktop_installation
-  validate_greetd_installation
+  validate_desktop_installation /mnt
+  validate_greetd_installation /mnt
   echo "Installed boot files, services, sudo, and desktop configuration validated."
 }
 
