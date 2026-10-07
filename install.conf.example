@@ -16,7 +16,7 @@
 TARGET_DISK=/dev/sda
 
 # Login name of the created user. Lowercase letters, digits, _, -; must not
-# be root. The user gets sudo via the wheel group (root stays locked).
+# be root. The user gets sudo via the wheel group.
 USERNAME=alice
 
 # Password for the new user, in plain text. Prompted for (twice, hidden) in
@@ -28,6 +28,14 @@ USER_PASSWORD=change-me
 # keep the single quotes so the $ characters survive. Generate e.g. with
 # openssl passwd -6. If set, it wins over USER_PASSWORD.
 #USER_PASSWORD_HASH='$6$rounds=5000$salt$hash'
+
+# Separate root password for console recovery. Prompted for (twice, hidden) in
+# interactive mode if unset. Required in --yes mode. Root login is enabled.
+ROOT_PASSWORD=change-this-root-password
+
+# SHA-512 crypt hash of the root password. Taken literally; if set, it wins
+# over ROOT_PASSWORD. Generate with: openssl passwd -6
+#ROOT_PASSWORD_HASH='$6$rounds=5000$salt$hash'
 
 # ---------------------------------------------------------------------------
 # OPTIONAL (defaults shown; uncomment to change)

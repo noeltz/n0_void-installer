@@ -10,7 +10,8 @@ one whole disk and installs a complete, bootable base system with:
   (last 10 kept) via wrapper scripts in `/usr/local/bin`
 - NetworkManager, chrony, runit services, hardware detection with matching
   drivers/firmware
-- one sudo-enabled user account (root stays locked) and, optionally,
+- one sudo-enabled user account and a separate root password for console
+  recovery and, optionally,
   chezmoi-managed dotfiles from a public GitHub repository
 
 No desktop environment or login manager is installed — that is expected to
@@ -58,17 +59,20 @@ All settings, defaults and validation rules are documented in
 
 ## After installation
 
-Remove the installation medium and reboot. Log in as the configured user;
-`sudo` works with that user's password (root's password is locked).
+Remove the installation medium and reboot. Log in with the configured user and
+password. That user can use `sudo`; root can also log in on the console with
+the separate root password configured during installation.
 
-### Recovery if the user password is lost
+### Recovery if a password is lost
 
-Root is locked, so recovery requires the live ISO:
+If the user's password is lost, log in as root on tty1 and run `passwd youruser`.
+If both passwords are lost, boot the live ISO and reset them from a chroot:
 
 ```sh
 mount -o subvol=@ /dev/sdX2 /mnt          # adjust the disk
 for d in dev proc sys; do mount --rbind /$d /mnt/$d; done
 chroot /mnt passwd youruser
+chroot /mnt passwd root
 ```
 
 ## Development

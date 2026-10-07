@@ -168,7 +168,7 @@ The config file is a plain `KEY=value` file. It is **parsed, never sourced**: so
 - Trailing carriage returns (files saved with Windows line endings) are stripped from every line before parsing: `line=${line%$'\r'}`.
 - Assignment: `printf -v "$key" '%s' "$val"`.
 
-Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6$rounds=5000$salt$hash'`.
+Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6$rounds=5000$salt$hash'`, `ROOT_PASSWORD_HASH='$6$rounds=5000$salt$hash'`.
 
 | Variable | Required | Default | Validation | Prompted (interactive mode, if unset) |
 |---|---|---|---|---|
@@ -177,6 +177,8 @@ Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6
 | `USERNAME` | yes | — | `^[a-z_][a-z0-9_-]{0,31}$`, not `root` | yes |
 | `USER_PASSWORD` | yes¹ | — | non-empty | yes (twice, hidden) |
 | `USER_PASSWORD_HASH` | yes¹ | — | begins with `$6$` (SHA-512 crypt) | no |
+| `ROOT_PASSWORD` | yes² | — | non-empty; independent root password | yes (twice, hidden) |
+| `ROOT_PASSWORD_HASH` | yes² | — | begins with `$6$` (SHA-512 crypt) | no |
 | `USER_SHELL` | no | `/bin/bash` | must be `/bin/bash` in v1 | no |
 | `TIMEZONE` | no | `UTC` | file `/usr/share/zoneinfo/$TIMEZONE` exists | yes (menu of available zones) |
 | `LOCALE` | no | `en_US.UTF-8` | line `#$LOCALE UTF-8` or `$LOCALE UTF-8` exists in `/etc/default/libc-locales` of the target (checked after bootstrap; preliminary check against the same file on the live system). The file is generated from glibc's `localedata/SUPPORTED`, so lines carry **trailing whitespace** — matching must tolerate it. The check is case-insensitive and accepts `.utf8` as a spelling of `.UTF-8`; the value is canonicalised to the spelling found in the file (`en_us.utf8` → `en_US.UTF-8`). Only genuinely unavailable locales are rejected | yes (menu of available locales) |
@@ -191,9 +193,10 @@ Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6
 | `HW_BLUETOOTH` | no | `auto` | `auto`, `yes`, `no` | no |
 
 ¹ Exactly one of `USER_PASSWORD` / `USER_PASSWORD_HASH` MUST end up set. If both are set, `USER_PASSWORD_HASH` wins.
+² Exactly one of `ROOT_PASSWORD` / `ROOT_PASSWORD_HASH` MUST end up set. If both are set, `ROOT_PASSWORD_HASH` wins. Root login is enabled with this independent password.
 
 **Prompt rules (interactive mode):**
-- A variable that is unset in the config and marked "prompted" is requested via `dialog --inputbox` (or `--passwordbox` for passwords) with the default prefilled.
+- A variable that is unset in the config and marked "prompted" is requested via `dialog --inputbox` (or `--passwordbox` for passwords) with the default prefilled. The console keymap is selected and loaded before prompting for the password, so password characters are entered using the same layout that will be active at login.
 - `TIMEZONE` and `LOCALE` are prompted as a `dialog --menu` listing the actually-available options: the files under `/usr/share/zoneinfo` on the live system (relative path form `Europe/Berlin`, excluding `posix/`, `right/` and the tzdata metadata files) and the `UTF-8` lines of `/etc/default/libc-locales`, respectively. The current value is passed as `--default-item`. If the source list is unexpectedly empty, they fall back to `--inputbox`.
 - Invalid input → show `dialog --msgbox "<reason>"` and ask again (loop until valid or Cancel).
 - Cancel at any dialog → exit 4.
@@ -201,7 +204,7 @@ Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6
 
 **Mode `--yes`:** unset variables take their default; variables with no default → exit 2 with `Missing required setting: <NAME>`.
 
-`install.conf.example` MUST contain every variable above, each with a comment line giving its purpose, default and allowed values; required ones are shown uncommented with placeholder values, the rest commented out. The example for `USER_PASSWORD_HASH` MUST use single quotes (`'$6$...'`) with a comment explaining that the hash is taken literally.
+`install.conf.example` MUST contain every variable above, each with a comment line giving its purpose, default and allowed values; required ones are shown uncommented with placeholder values, the rest commented out. The examples for `USER_PASSWORD_HASH` and `ROOT_PASSWORD_HASH` MUST use single quotes (`'$6$...'`) with a comment explaining that each hash is taken literally.
 
 ---
 
@@ -607,11 +610,10 @@ chroot /mnt xbps-reconfigure -f glibc-locales
 printf '%%wheel ALL=(ALL:ALL) ALL\n' > /mnt/etc/sudoers.d/10-wheel
 chmod 0440 /mnt/etc/sudoers.d/10-wheel
 
-# root account: password locked (login only via the user + sudo)
-chroot /mnt passwd -l root
+# The root password is set together with the regular user's password in step 10.11.
 
 # zram swap (only if SWAP=zram): MERGE into the shipped conf, never overwrite it
-for kv in ZRAM_COMP_ALGORITHM=zstd ZRAM_PRIORITY=32767 ZRAM_SIZE=50 ZRAM_MAX_SIZE=8192; do
+for kv in ZRAM_COMP_ALGORITHM=zstd ZRAM_PRIORITY=32767 ZRAM_SIZE=50 ZRAM_MAX_SIZE=8192 ZRAMEN_QUIET=1; do
   k=${kv%%=*}; v=${kv#*=}
   if grep -q "^[# ]*export $k=" /mnt/etc/sv/zramen/conf; then
     sed -i "s|^[# ]*export $k=.*|export $k=$v|" /mnt/etc/sv/zramen/conf
@@ -707,8 +709,11 @@ useradd -m -s /bin/bash -G wheel,audio,video,input "$USERNAME"
 Password:
 - `USER_PASSWORD_HASH` set: `printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD_HASH" | chroot /mnt chpasswd -e`
 - else: `printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd`
+- `ROOT_PASSWORD_HASH` set: `printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chroot /mnt chpasswd -e`
+- else: `printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd`
 
 Passwords MUST NOT be written to any file, `ps`-visible command line, or exported into the chroot environment; they are passed on stdin only.
+After setting passwords, `passwd -S` MUST report status `P` for both accounts or installation fails before reporting success.
 
 ### 10.12 (reserved for section 13: chezmoi)
 
@@ -748,7 +753,7 @@ After a successful run, a freshly booted system MUST show:
 - `sv status /var/service/*` shows all services from 10.10 `run`
 - `nmcli` works, `ping` works after connecting
 - `chronyc tracking` responds
-- `getent passwd root` shows locked password (`passwd -S root` → `L`)
+- `passwd -S root` and `passwd -S <username>` report `P` (both accounts have usable passwords)
 - `swapon --show` lists `/dev/zram0` (if `SWAP=zram`)
 
 ---
@@ -944,9 +949,9 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-16 | `CHEZMOI_REPO` set to a nonexistent repo | installer completes, prints the chezmoi warning, exit 0 |
 | T-17 | VM detection | `qemu-ga` and `spice-vdagentd` services exist and are `run`; no `tlp` |
 | T-18 | `SWAP=none` | no zram, no `zramen` service |
-| T-19 | `sudo` as the new user | works with password; root login is locked |
+| T-19 | Log in on tty1 as root and as the new user; run `sudo` as the new user | both logins work with their separate configured passwords; sudo works with the user's password |
 | T-20 | Reboot persistence | NVRAM boot entry `Void` survives power cycle (OVMF_VARS file kept) |
-| T-21 | Config with `USER_PASSWORD_HASH='$6$...'` (single-quoted) | install completes; user can log in with the matching password |
+| T-21 | Config with `USER_PASSWORD_HASH='$6$...'` and `ROOT_PASSWORD_HASH='$6$...'` (single-quoted) | install completes; both accounts can log in with their matching passwords |
 | T-22 | Custom `MIRROR` (e.g. a regional mirror base URL) | install completes; target `/etc/xbps.d/*-repository-*.conf` contain the custom mirror; `xbps-query -L` in target agrees |
 | T-23 | Invalid config value (`HOSTNAME="Bad Host!"`) and an unknown key | exit 2 with `Invalid value for HOSTNAME: ...` / `Invalid config line: ...` |
 | T-24 | Run the installer a second time on the already installed disk | wipes cleanly, installs again, exit 0 |
@@ -982,9 +987,9 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 1. **UEFI only.** BIOS boot aborts.
 2. **Bash and `dialog`** (not POSIX sh, not whiptail).
 3. **Kernel:** `linux` meta-package, not LTS.
-4. **Root is locked;** the user is in `wheel` with `sudo` (not doas).
+4. **Root has an independently configured password** for console recovery; the regular user is in `wheel` with `sudo` (not doas).
 5. **Time sync:** `chrony`; **laptop power:** `tlp` + `upower`; **audio:** only `alsa-utils` (+ `sof-firmware` on Intel). No PipeWire/compositor/login manager — expected to come from the dotfiles bootstrap.
-6. **zram:** `zramen`, zstd, 50 % of RAM, capped at 8192 MiB, priority 32767.
+6. **zram:** `zramen`, zstd, 50 % of RAM, capped at 8192 MiB, priority 32767. Suppress informational startup messages on the login console (`ZRAMEN_QUIET=1`); warnings and errors remain visible.
 7. **btrfs options:** `noatime,compress=zstd:1,discard=async`.
 8. **No PAM changes** for fingerprint login; the user enrols manually.
 9. **NVIDIA:** nouveau only.
@@ -1000,7 +1005,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 19. **Fingerprint:** packages `fprintd`/`libfprint` are installed; PAM (which Void does use) is left untouched. The user wires up `pam_fprintd` and enrols manually.
 20. **Config is parsed, not sourced** (section 6).
 21. **Users are not added to the `network` group** (elogind + polkit grant NetworkManager access to local sessions).
-22. **Root recovery:** root is locked and `sudo` is the only escalation path. If the user's password is lost, recovery means booting the live ISO, mounting the subvolumes as in 10.4, chrooting and running `passwd`. The README MUST state this.
+22. **Root recovery:** root login is enabled with a separate password configured during installation. If both passwords are lost, recovery means booting the live ISO, mounting the subvolumes as in 10.4, chrooting and running `passwd` for the affected accounts. The README MUST state this.
 23. **Self-healing, zero-install preflight:** the live ISO ships no curl, no dialog and an outdated xbps. Preflight self-updates xbps, verifies the ISO's **native** tools instead of installing packages over the old userland (library skew → `symbol lookup error`; a full sync needs ~2.5 GiB and does not fit in the ISO's RAM-backed root), and uses bash `/dev/tcp` for the network check. `dialog` (not on the ISO) is installed on demand in interactive mode. Fetching install.sh uses `xbps-fetch` — part of xbps, shipped on the ISO, own HTTPS stack, no repo transaction; no curl anywhere.
 24. **sfdisk instead of sgdisk:** partitioning uses util-linux `sfdisk`, shipped by the ISO — GPT label, type GUIDs and partition names equivalent to `sgdisk -n/-t/-c`, and it re-reads the partition table itself (no `partprobe`, no gptfdisk/parted install). The `udevadm settle` plus device-poll loop stays.
 

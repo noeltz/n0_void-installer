@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.1"
+INSTALLER_VERSION="1.3.2"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -96,7 +96,8 @@ load_config() {
     key=${BASH_REMATCH[1]}
     val=${BASH_REMATCH[2]}
     case $key in
-      TARGET_DISK|HOSTNAME|USERNAME|USER_PASSWORD|USER_PASSWORD_HASH|USER_SHELL|\
+      TARGET_DISK|HOSTNAME|USERNAME|USER_PASSWORD|USER_PASSWORD_HASH|\
+      ROOT_PASSWORD|ROOT_PASSWORD_HASH|USER_SHELL|\
       TIMEZONE|LOCALE|KEYMAP|MIRROR|SWAP|CHEZMOI_REPO|EXTRA_PACKAGES|HW_CHASSIS|\
       HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH)
         ;;
@@ -170,6 +171,18 @@ validate_one() {
       fi
       ;;
     USER_PASSWORD_HASH)
+      if ! [[ $val == \$6\$* ]]; then
+        VALIDATE_REASON="must be a SHA-512 crypt hash beginning with \$6\$"
+        return 1
+      fi
+      ;;
+    ROOT_PASSWORD)
+      if [[ -z $val ]]; then
+        VALIDATE_REASON="must not be empty"
+        return 1
+      fi
+      ;;
+    ROOT_PASSWORD_HASH)
       if ! [[ $val == \$6\$* ]]; then
         VALIDATE_REASON="must be a SHA-512 crypt hash beginning with \$6\$"
         return 1
@@ -305,6 +318,23 @@ validate_all() {
     fi
   else
     echo "Missing required setting: USER_PASSWORD" >&2
+    exit 2
+  fi
+
+  # Root credentials are configured independently so console recovery remains
+  # possible if the regular user's password or account is unavailable.
+  if [[ -v ROOT_PASSWORD_HASH ]]; then
+    if ! validate_one ROOT_PASSWORD_HASH "$ROOT_PASSWORD_HASH"; then
+      echo "Invalid value for ROOT_PASSWORD_HASH: $VALIDATE_REASON" >&2
+      exit 2
+    fi
+  elif [[ -v ROOT_PASSWORD ]]; then
+    if ! validate_one ROOT_PASSWORD "$ROOT_PASSWORD"; then
+      echo "Invalid value for ROOT_PASSWORD: $VALIDATE_REASON" >&2
+      exit 2
+    fi
+  else
+    echo "Missing required setting: ROOT_PASSWORD" >&2
     exit 2
   fi
 
@@ -806,6 +836,30 @@ prompt_password() {
   done
 }
 
+prompt_root_password() {
+  local p1 p2
+  while true; do
+    if ! p1=$(dialog --clear --title "ROOT_PASSWORD" --passwordbox \
+        "Root password for console recovery" 10 70 3>&1 1>&2 2>&3); then
+      exit 4
+    fi
+    if ! p2=$(dialog --clear --title "ROOT_PASSWORD" --passwordbox \
+        "Repeat root password" 10 70 3>&1 1>&2 2>&3); then
+      exit 4
+    fi
+    if [[ -z $p1 ]]; then
+      dialog --msgbox "Root password must not be empty." 10 70 || exit 4
+      continue
+    fi
+    if [[ $p1 != "$p2" ]]; then
+      dialog --msgbox "Root passwords do not match." 10 70 || exit 4
+      continue
+    fi
+    ROOT_PASSWORD=$p1
+    return 0
+  done
+}
+
 prompt_menu() {  # $1 = var, $2 = title, $3 = prompt text, rest = tag/desc pairs
   local var=$1 title=$2 text=$3 choice
   shift 3
@@ -852,20 +906,29 @@ prompt_missing() {
   if ! is_config_set HOSTNAME; then
     prompt_value HOSTNAME "Hostname"
   fi
+  if ! is_config_set KEYMAP; then
+    prompt_value KEYMAP "Console keymap"
+  fi
+  # The password must be entered using the same layout the installed system
+  # will use at login. The live ISO's current keymap may differ.
+  if ! loadkeys "$KEYMAP"; then
+    echo "Failed to load console keymap: $KEYMAP" >&2
+    exit 3
+  fi
   if ! is_config_set USERNAME; then
     prompt_value USERNAME "Username for the new user"
   fi
   if ! is_config_set USER_PASSWORD && ! is_config_set USER_PASSWORD_HASH; then
     prompt_password
   fi
+  if ! is_config_set ROOT_PASSWORD && ! is_config_set ROOT_PASSWORD_HASH; then
+    prompt_root_password
+  fi
   if ! is_config_set TIMEZONE; then
     prompt_timezone
   fi
   if ! is_config_set LOCALE; then
     prompt_locale
-  fi
-  if ! is_config_set KEYMAP; then
-    prompt_value KEYMAP "Console keymap"
   fi
   if ! is_config_set CHEZMOI_REPO; then
     prompt_value CHEZMOI_REPO "chezmoi dotfiles repo (https://... or GitHub user/repo, empty to skip)"
@@ -888,6 +951,7 @@ confirm() {
   printf '  %-12s %s  (%s, %s)   <-- WILL BE ERASED\n' "Disk:" "$TARGET_DISK" "$size" "$model"
   printf '  %-12s %s\n' "Hostname:" "$HOSTNAME"
   printf '  %-12s %s\n' "User:" "$USERNAME"
+  printf '  %-12s %s\n' "Root login:" "enabled (separate password)"
   printf '  %-12s %s\n' "Timezone:" "$TIMEZONE"
   printf '  %-12s %s\n' "Locale:" "$LOCALE"
   printf '  %-12s %s\n' "Keymap:" "$KEYMAP"
@@ -1073,10 +1137,8 @@ configure_system() {
   printf '%%wheel ALL=(ALL:ALL) ALL\n' > /mnt/etc/sudoers.d/10-wheel
   chmod 0440 /mnt/etc/sudoers.d/10-wheel
 
-  chroot /mnt passwd -l root
-
   if [[ $SWAP == zram ]]; then
-    for kv in ZRAM_COMP_ALGORITHM=zstd ZRAM_PRIORITY=32767 ZRAM_SIZE=50 ZRAM_MAX_SIZE=8192; do
+    for kv in ZRAM_COMP_ALGORITHM=zstd ZRAM_PRIORITY=32767 ZRAM_SIZE=50 ZRAM_MAX_SIZE=8192 ZRAMEN_QUIET=1; do
       k=${kv%%=*}
       v=${kv#*=}
       if grep -qE "^[# ]*export $k=" /mnt/etc/sv/zramen/conf; then
@@ -1172,6 +1234,7 @@ EOF
 }
 
 create_user() {
+  local account_status
   chroot /mnt useradd -m -s "$USER_SHELL" -G wheel,audio,video,input "$USERNAME"
   # Passwords are passed on stdin only: never on disk outside /etc/shadow,
   # never in the process list, never in the chroot environment.
@@ -1179,6 +1242,26 @@ create_user() {
     printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD_HASH" | chroot /mnt chpasswd -e
   else
     printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd
+  fi
+
+  # Set an independent root password; root remains available at the console
+  # as a recovery account if the regular user cannot authenticate.
+  if [[ -v ROOT_PASSWORD_HASH ]]; then
+    printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chroot /mnt chpasswd -e
+  else
+    printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd
+  fi
+
+  # Catch incomplete account setup before reporting a successful install.
+  account_status=$(chroot /mnt passwd -S "$USERNAME")
+  if [[ $account_status != "$USERNAME P "* ]]; then
+    echo "User account $USERNAME does not have an active password after setup." >&2
+    exit 1
+  fi
+  account_status=$(chroot /mnt passwd -S root)
+  if [[ $account_status != "root P "* ]]; then
+    echo "Root account does not have an active password after setup." >&2
+    exit 1
   fi
 }
 
