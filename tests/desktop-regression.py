@@ -131,10 +131,13 @@ with tempfile.TemporaryDirectory(prefix="void-desktop-regression-") as directory
     result = check_gui()
     assert result.returncode != 0 and "does not match" in result.stderr, result.stderr
 
-# If the host has XKB rules, also check every conversion against the real
-# registry rather than relying only on the small deterministic target fixture.
+# On Void, also check every conversion against its real registry. Ubuntu CI
+# uses a different XKB release (without Void's ABNT2 model); the installed
+# target's registry is always checked by the installer regardless of host OS.
 registry_path = pathlib.Path("/usr/share/X11/xkb/rules/evdev.xml")
-if registry_path.exists():
+os_release = pathlib.Path("/etc/os-release")
+is_void = os_release.exists() and "ID=void" in os_release.read_text().splitlines()
+if is_void and registry_path.exists():
     registry = ET.parse(registry_path).getroot()
     layouts = {item.findtext("configItem/name"): item for item in registry.findall("layoutList/layout")}
     models = {item.findtext("configItem/name") for item in registry.findall("modelList/model")}
