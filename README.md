@@ -14,6 +14,11 @@ one whole disk and installs a complete, bootable base system with:
   recovery and, optionally,
   chezmoi-managed dotfiles from a public GitHub repository
 
+The installer verifies that `/mnt` is clear before starting, refuses disks
+that are mounted, read-only, or held by another block device, and only
+unmounts paths it mounted itself. Implementation and test progress is tracked
+in `IMPLEMENTATION_PROGRESS.md`.
+
 No desktop environment or login manager is installed — that is expected to
 come from your dotfiles.
 

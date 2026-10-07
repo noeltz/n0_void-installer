@@ -13,6 +13,22 @@
 - Package and service names were researched against the Void repositories. Because names can change, the installer MUST validate every package name **and every fatal service directory** against the mirror **before** touching any disk (section 10.1). A renamed package or a missing service therefore fails safely, before any destructive action. (Optional hardware services are checked after install and only warn.) **Full dependency resolution and disk-space validation runs against the mounted target `/mnt` in step 11, after the filesystem is created.**
 - Section 16 lists decisions the author made beyond the customer's answers. They are fixed for v1, but are collected in one place so they can be changed deliberately.
 
+### 0.1 Incremental implementation amendments
+
+The implementation sequence and verification evidence are recorded in
+`IMPLEMENTATION_PROGRESS.md`. These amendments supersede conflicting v1
+decisions as each increment is released:
+
+- Cleanup may unmount only mounts created and recorded by this run. Before
+  installation, `/mnt` must be an empty directory with no mounts below it;
+  the target disk and its partitions must be unmounted, writable, and free of
+  block-device holders. Target swap must be deactivated successfully.
+- Later increments add a persistent sanitized log and versioned checkpoint
+  record, EFI fallback boot files, cached repository probes, first-login
+  chezmoi setup, an optional target NetworkManager Wi-Fi profile, and explicit
+  resume/repair modes. Acceptance criteria are tracked in the progress ledger
+  and added here as those increments are implemented.
+
 ---
 
 ## 1. Goal and scope

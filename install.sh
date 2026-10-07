@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.3"
+INSTALLER_VERSION="1.3.4"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -21,6 +21,8 @@ CURRENT_STEP_N=0
 CURRENT_STEP_NAME="startup"
 VALIDATE_REASON=""
 CONFIG_SET=" "               # " KEY1 KEY2 ... " — keys that came from the config file
+declare -a INSTALL_MOUNTS=()
+INSTALLER_SUDOERS_CREATED=0
 
 declare -A PKG_SEEN=()
 PKGS_ALL=()
@@ -349,7 +351,7 @@ validate_all() {
 # spec 7.1. Rules 1/2/4 → exit 2 "Invalid value..."; rule 3 (mounted) has its
 # own message.
 validate_target_disk() {
-  local dtype sizeb
+  local dtype sizeb read_only device_name holders
   TARGET_DISK=$(readlink -f "$TARGET_DISK")
   dtype=$(lsblk -dno TYPE "$TARGET_DISK" 2>/dev/null || true)
   if [[ $dtype != disk ]]; then
@@ -360,6 +362,19 @@ validate_target_disk() {
     echo "Target disk or one of its partitions is mounted." >&2
     exit 2
   fi
+  read_only=$(lsblk -dno RO "$TARGET_DISK" 2>/dev/null || echo 1)
+  if [[ $read_only != 0 ]]; then
+    echo "Target disk is read-only." >&2
+    exit 2
+  fi
+  while IFS= read -r device_name; do
+    [[ -n $device_name ]] || continue
+    holders="/sys/class/block/${device_name##*/}/holders"
+    if [[ -d $holders ]] && compgen -G "$holders/*" >/dev/null; then
+      echo "Target disk is in use by another block device (holder: $device_name)." >&2
+      exit 2
+    fi
+  done < <(lsblk -nrpo NAME "$TARGET_DISK")
   sizeb=$(lsblk -dbno SIZE "$TARGET_DISK" 2>/dev/null || echo 0)
   if ! [[ $sizeb =~ ^[0-9]+$ ]] || (( sizeb < MIN_DISK_BYTES )); then
     echo "Invalid value for TARGET_DISK: disk smaller than 20 GiB" >&2
@@ -392,6 +407,22 @@ preflight() {
   fi
   if [[ $EUID -ne 0 ]]; then
     echo "Must be run as root." >&2
+    exit 3
+  fi
+  if [[ ! -d /mnt ]]; then
+    echo "Mount directory /mnt is missing or is not a directory." >&2
+    exit 3
+  fi
+  if ! command -v findmnt >/dev/null 2>&1; then
+    echo "Required tool not found on the live system: findmnt" >&2
+    exit 3
+  fi
+  if findmnt -rn -o TARGET | awk '$0 == "/mnt" || index($0, "/mnt/") == 1 { found=1 } END { exit !found }'; then
+    echo "The /mnt tree already contains a mount; unmount it before installing." >&2
+    exit 3
+  fi
+  if [[ -n $(find /mnt -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
+    echo "The /mnt directory is not empty; move its contents before installing." >&2
     exit 3
   fi
   if ! (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
@@ -451,6 +482,7 @@ preflight() {
   require_tool mkfs.btrfs --version
   require_tool mkfs.vfat
   require_tool lsblk --version
+  require_tool findmnt --version
   require_tool blkid --version
   require_tool wipefs --version
   require_tool udevadm --version
@@ -977,9 +1009,45 @@ part() {  # $1 = partition number
   esac
 }
 
-partition_disk() {
-  umount -R /mnt 2>/dev/null || true
+mount_owned() {  # $1 = mountpoint; remaining args are passed to mount
+  local target=$1
+  shift
+  mount "$@"
+  record_owned_mount "$target"
+}
 
+record_owned_mount() {  # $1 = mountpoint already mounted by this installer
+  local target=$1 identity source fstype
+  identity=$(findmnt -rn -o TARGET,SOURCE,FSTYPE | awk -v target="$target" '$1 == target { print $2 "|" $3; found=1; exit } END { if (!found) exit 1 }')
+  IFS='|' read -r source fstype <<< "$identity"
+  [[ -n $source && -n $fstype ]] || { echo "Could not record mount identity for $target." >&2; return 1; }
+  INSTALL_MOUNTS+=("$target|$source|$fstype")
+}
+
+unmount_owned() {
+  local entry target expected_source expected_fstype actual_source actual_fstype index
+  for (( index=${#INSTALL_MOUNTS[@]} - 1; index >= 0; index-- )); do
+    entry=${INSTALL_MOUNTS[index]}
+    IFS='|' read -r target expected_source expected_fstype <<< "$entry"
+    if ! findmnt -rn -o TARGET | awk -v target="$target" '$0 == target { found=1 } END { exit !found }'; then
+      unset 'INSTALL_MOUNTS[index]'
+      continue
+    fi
+    identity=$(findmnt -rn -o TARGET,SOURCE,FSTYPE | awk -v target="$target" '$1 == target { print $2 "|" $3; found=1; exit } END { if (!found) exit 1 }' || true)
+    IFS='|' read -r actual_source actual_fstype <<< "$identity"
+    if [[ $actual_source != "$expected_source" || $actual_fstype != "$expected_fstype" ]]; then
+      echo "Leaving mount at $target in place because its identity changed." >&2
+      continue
+    fi
+    if ! umount "$target"; then
+      echo "Could not unmount installer-owned mount at $target." >&2
+      continue
+    fi
+    unset 'INSTALL_MOUNTS[index]'
+  done
+}
+
+partition_disk() {
   # Targeted swapoff: only deactivate swap on the target disk.
   # swapoff -a would take down unrelated system swap (other disks, zram).
   # Match partitions of TARGET_DISK: /dev/sdaN, /dev/nvme0n1pN, /dev/mmcblk0pN, etc.
@@ -987,7 +1055,10 @@ partition_disk() {
   while IFS= read -r swdev; do
     case $swdev in
       "$TARGET_DISK"[0-9]*|"$TARGET_DISK"p[0-9]*)
-        swapoff "$swdev" || true ;;
+        if ! swapoff "$swdev"; then
+          echo "Could not deactivate target-disk swap device $swdev." >&2
+          return 1
+        fi ;;
     esac
   done < <(awk 'NR>1{print $1}' /proc/swaps)
 
@@ -1021,21 +1092,21 @@ format_disk() {
 
 mount_layout() {
   local sv
-  mount "$(part 2)" /mnt                       # top level (subvolid 5)
+  mount_owned /mnt "$(part 2)" /mnt             # top level (subvolid 5)
   for sv in @ @home @snapshots @var_log @var_cache_xbps @var_tmp; do
     btrfs subvolume create "/mnt/$sv"
   done
-  umount /mnt
+  unmount_owned
 
-  mount -o "$BTRFS_OPTS,subvol=@" "$(part 2)" /mnt
+  mount_owned /mnt -o "$BTRFS_OPTS,subvol=@" "$(part 2)" /mnt
   mkdir -p /mnt/{home,.snapshots,var/log,var/cache/xbps,var/tmp,boot/efi}
-  mount -o "$BTRFS_OPTS,subvol=@home"           "$(part 2)" /mnt/home
-  mount -o "$BTRFS_OPTS,subvol=@var_log"        "$(part 2)" /mnt/var/log
-  mount -o "$BTRFS_OPTS,subvol=@var_cache_xbps" "$(part 2)" /mnt/var/cache/xbps
-  mount -o "$BTRFS_OPTS,subvol=@var_tmp"        "$(part 2)" /mnt/var/tmp
+  mount_owned /mnt/home -o "$BTRFS_OPTS,subvol=@home" "$(part 2)" /mnt/home
+  mount_owned /mnt/var/log -o "$BTRFS_OPTS,subvol=@var_log" "$(part 2)" /mnt/var/log
+  mount_owned /mnt/var/cache/xbps -o "$BTRFS_OPTS,subvol=@var_cache_xbps" "$(part 2)" /mnt/var/cache/xbps
+  mount_owned /mnt/var/tmp -o "$BTRFS_OPTS,subvol=@var_tmp" "$(part 2)" /mnt/var/tmp
   # @snapshots is deliberately not mounted yet: snapper creates a nested
   # .snapshots subvolume first, which setup_snapper replaces (spec 10.4/10.8).
-  mount -o umask=0077 "$(part 1)" /mnt/boot/efi
+  mount_owned /mnt/boot/efi -o umask=0077 "$(part 1)" /mnt/boot/efi
 }
 
 # --------------------------------------------------------------------------
@@ -1084,7 +1155,7 @@ bootstrap_system() {
         sed -i "s|https://repo-default.voidlinux.org|$MIRROR|g" /mnt/etc/xbps.d/*-repository-*.conf
       fi
       for d in dev proc sys; do
-        mount --rbind "/$d" "/mnt/$d"
+        mount_owned "/mnt/$d" --rbind "/$d" "/mnt/$d"
         mount --make-rslave "/mnt/$d"
       done
       cp /etc/resolv.conf /mnt/etc/resolv.conf
@@ -1165,7 +1236,10 @@ rmdir /.snapshots 2>/dev/null || true
 snapper --no-dbus -c root create-config /
 btrfs subvolume delete /.snapshots
 mkdir /.snapshots
-mount /.snapshots
+CHROOT_EOF
+  mount_owned /mnt/.snapshots -o "$BTRFS_OPTS,subvol=@snapshots" "$(part 2)" /mnt/.snapshots
+  chroot /mnt /bin/bash -s <<'CHROOT_EOF'
+set -eu
 chmod 750 /.snapshots
 snapper --no-dbus -c root set-config \
   "TIMELINE_CREATE=no" "TIMELINE_CLEANUP=no" \
@@ -1277,12 +1351,18 @@ apply_chezmoi() {
   if [[ -z $CHEZMOI_REPO ]]; then
     return 0
   fi
+  if [[ -e /mnt/etc/sudoers.d/99-installer ]]; then
+    echo "Refusing to overwrite existing /etc/sudoers.d/99-installer." >&2
+    return 1
+  fi
   printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$USERNAME" > /mnt/etc/sudoers.d/99-installer
+  INSTALLER_SUDOERS_CREATED=1
   chmod 0440 /mnt/etc/sudoers.d/99-installer
   if ! chroot /mnt su - "$USERNAME" -c "chezmoi init --apply --force '$CHEZMOI_REPO'" </dev/null; then
     CHEZMOI_FAILED=1
   fi
   rm -f /mnt/etc/sudoers.d/99-installer
+  INSTALLER_SUDOERS_CREATED=0
 }
 
 # --------------------------------------------------------------------------
@@ -1368,9 +1448,16 @@ initial_snapshot() {
 # --------------------------------------------------------------------------
 
 finalize() {
-  rm -f /mnt/etc/sudoers.d/99-installer     # temporary NOPASSWD rule (section 13)
+  if (( INSTALLER_SUDOERS_CREATED == 1 )); then
+    rm -f /mnt/etc/sudoers.d/99-installer   # temporary NOPASSWD rule (section 13)
+    INSTALLER_SUDOERS_CREATED=0
+  fi
   rm -f /mnt/etc/resolv.conf                # NetworkManager manages it at boot
-  umount -R /mnt
+  unmount_owned
+  if (( ${#INSTALL_MOUNTS[@]} > 0 )); then
+    echo "Some installer-owned mounts remain; see the log before rebooting." >&2
+    return 1
+  fi
   sync
   echo "Installation complete. Remove the installation medium and reboot."
   if [[ ${HW_GPUS:-} == *nvidia* ]]; then
@@ -1386,8 +1473,10 @@ finalize() {
 }
 
 cleanup() {
-  rm -f /mnt/etc/sudoers.d/99-installer 2>/dev/null || true
-  umount -R /mnt 2>/dev/null || true
+  if (( INSTALLER_SUDOERS_CREATED == 1 )) && [[ -d /mnt/etc/sudoers.d ]]; then
+    rm -f /mnt/etc/sudoers.d/99-installer 2>/dev/null || true
+  fi
+  unmount_owned || true
 }
 
 on_error() {
