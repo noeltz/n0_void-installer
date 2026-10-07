@@ -526,19 +526,26 @@ cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
 ```
 
 **Full dependency + disk-space validation against `/mnt`.** After keys are copied,
-run a dry-run of the complete transaction against the mounted target filesystem.
-This uses `-n` (dry-run) **without** `-M` so repodata is persisted to
-`/mnt/var/db/xbps` (identical to the real install), and an explicit `--cachedir`
-on the disk-backed `@var_cache_xbps` subvolume:
+first synchronize repository indexes in a separate, package-free invocation.
+XBPS skips `-S` synchronization when `-n` is set, so combining them leaves a
+fresh target with no indexes and reports `base-system` as missing. Then run a
+dry-run of the complete transaction using the persisted indexes, without `-M`.
+Both calls use disk-backed temporary storage and an explicit `--cachedir`:
 
 ```bash
-XBPS_ARCH=x86_64 xbps-install -n -y -S -r /mnt \
+TMPDIR=/mnt/var/tmp \
+XBPS_ARCH=x86_64 xbps-install -S -y -r /mnt \
+  --cachedir /mnt/var/cache/xbps \
+  -R "$MIRROR/current" -R "$MIRROR/current/nonfree"
+
+TMPDIR=/mnt/var/tmp \
+XBPS_ARCH=x86_64 xbps-install -n -y -r /mnt \
   --cachedir /mnt/var/cache/xbps \
   -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
   "${PKGS_ALL[@]}"
 ```
 
-On failure: print `Dependency/disk-space validation against /mnt failed. See output above.` and exit 1 (the disk has already been wiped at this point; exit 3 no longer applies). On success: fall through to step 12.
+On synchronization failure: print `Repository synchronization against /mnt failed. See output above.` and exit 1. On validation failure: print `Dependency/disk-space validation against /mnt failed. See output above.` and exit 1 (the disk has already been wiped at this point; exit 3 no longer applies). On success: fall through to step 12.
 
 ### 10.6 Step 12 — install packages
 

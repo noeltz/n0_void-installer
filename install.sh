@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.0"
+INSTALLER_VERSION="1.3.1"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -985,12 +985,21 @@ bootstrap_system() {
       mkdir -p /mnt/var/db/xbps/keys
       cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
 
-      # Full dependency + disk-space validation against the mounted target.
-      # Runs a dry-run (-n) without -M so repodata is persisted to
-      # /mnt/var/db/xbps (same as the real transaction). Uses explicit
-      # --cachedir on the disk-backed @var_cache_xbps subvolume.
+      # XBPS skips -S when -n is set. Sync separately so a fresh target has
+      # on-disk repository indexes before the dry-run resolves packages.
+      TMPDIR=/mnt/var/tmp \
+      XBPS_ARCH=x86_64 xbps-install -S -y -r /mnt \
+        --cachedir /mnt/var/cache/xbps \
+        -R "$MIRROR/current" -R "$MIRROR/current/nonfree" || {
+          echo "Repository synchronization against /mnt failed. See output above." >&2
+          exit 1
+        }
+
+      # Full dependency + disk-space validation uses the persisted indexes
+      # and the same disk-backed root and cache as the real transaction.
       local rc=0
-      XBPS_ARCH=x86_64 xbps-install -n -y -S -r /mnt \
+      TMPDIR=/mnt/var/tmp \
+      XBPS_ARCH=x86_64 xbps-install -n -y -r /mnt \
         --cachedir /mnt/var/cache/xbps \
         -R "$MIRROR/current" -R "$MIRROR/current/nonfree" \
         "${PKGS_ALL[@]}" || rc=$?

@@ -76,3 +76,14 @@ chroot /mnt passwd youruser
 The installer implements `installer_spec.md` (binding specification).
 ShellCheck must pass cleanly, including on the embedded xbps wrapper
 (extracted and checked separately in CI).
+
+Run the isolated XBPS bootstrap regression test on a Void system with Python 3
+and OpenSSL available:
+
+```sh
+python3 tests/bootstrap-regression.py
+```
+
+It serves a signed fixture repository on localhost and uses a temporary target
+to reproduce the `-n -S` failure and verify separate synchronization followed
+by a dry-run. It installs no packages and requires no root privileges.
