@@ -9,8 +9,8 @@ recovery action are recorded here.
 
 | Increment | Release | Status | Verification / next action |
 |---|---:|---|---|
-| Wayfire, wf-shell, kitty and synchronized keyboard | 1.3.11 | Verified; ready to push | Desktop/keymap, state, resume failure, bootstrap, account and existing regressions pass; ShellCheck and syntax pass. |
-| Greetd and tuigreet on tty7 | 1.3.12 | Pending | Preserve packaged greeter account and tty1; test TOML, cache, service and session wrapper. |
+| Wayfire, wf-shell, kitty and synchronized keyboard | 1.3.11 | Complete; pushed | Commit `83dc0f6`; all regressions, ShellCheck and syntax pass. |
+| Greetd and tuigreet on tty7 | 1.3.12 | Verified; ready to push | Greetd/desktop and existing regressions, bootstrap, ShellCheck and syntax pass. |
 | Graphical first-login chezmoi | 1.3.13 | Pending | Test visible kitty setup, shared locking, completion and explicit retry. |
 
 Decisions: install only the five requested packages and their dependencies;
@@ -22,7 +22,10 @@ from KEYMAP without a separate setting; open first-login setup in kitty.
 - Increment 1 also fixed resume dispatch suppressing Bash error handling; an injected action failure now stops without advancing its checkpoint.
 - Verification: all nine regression scripts, installer/embedded-helper ShellCheck, syntax, help and diff checks pass. Initial state fixture lacked the new total-step constant; corrected and rerun.
 - Remote packages confirmed: wayfire 0.11.0_1, wf-shell 0.11.0_2, kitty 0.48.2_1, greetd 0.10.3_2, tuigreet 0.11.1_1.
-- Current next action: push increment 1, then implement greetd on tty7.
+- Increment 1 pushed as `83dc0f6`. Increment 2 retains Void's `_greeter` account, packaged PAM and runit service; enables greetd and removes only the tty7 agetty link.
+- Actual Void greetd package configuration and tuigreet 0.11.1 source verified: first discovered native session is selected automatically; remembered sessions keep using the wrapper.
+- Increment 2 test note: the bootstrap fixture's localhost socket was blocked in the sandbox; rerun with network permission. No product-code failure remains.
+- Current next action: verify and push increment 2, then add visible graphical chezmoi setup.
 - VM acceptance: T-30/T-31 pending; this workspace has no VM runner.
 
 Implementation is split into seven independently reviewed releases. A later

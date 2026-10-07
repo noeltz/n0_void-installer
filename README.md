@@ -12,6 +12,8 @@ one whole disk and installs a complete, bootable base system with:
   drivers/firmware
 - Wayfire, wf-shell and kitty with a panel, terminal launcher and keyboard
   layout derived from the selected console keymap
+- greetd with tuigreet on tty7, native session selection and remembered
+  user/session; tty1 stays available for console recovery
 - one sudo-enabled user account and a separate root password for console
   recovery and, optionally,
   chezmoi-managed dotfiles from a public GitHub repository
@@ -90,11 +92,15 @@ All settings, defaults and validation rules are documented in
 
 ## After installation
 
-Remove the installation medium and reboot. Log in with the configured user and
-password. That user can use `sudo`; root can also log in on the console with
+Remove the installation medium and reboot. Log in through tuigreet on tty7
+with the configured user and password; F3 selects Wayfire or another installed
+session. That user can use `sudo`; root can also log in on tty1 with
 the separate root password configured during installation.
 
-Start the desktop from the console with `dbus-run-session -- wayfire`.
+Use Ctrl+Alt+F1 for the recovery console and Ctrl+Alt+F7 to return to greetd.
+Selected Wayland sessions run under `dbus-run-session --` without modifying
+their native session files. To start Wayfire manually from the console, use
+`dbus-run-session -- wayfire`.
 Super+Enter opens kitty, Super+Q closes a window, Alt+Tab switches windows,
 Super+arrow tiles windows, and Super+Escape logs out. The panel also provides
 an application menu, kitty launcher, network status, battery and clock.
@@ -134,6 +140,7 @@ Desktop configuration and checkpoint failure checks run without a VM:
 
 ```sh
 python3 tests/desktop-regression.py
+python3 tests/greetd-regression.py
 python3 tests/resume-repair-regression.py
 python3 tests/installer-state-regression.py
 ```

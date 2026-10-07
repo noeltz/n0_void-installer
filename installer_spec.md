@@ -71,7 +71,7 @@ Build a **single Bash script** that, when run from the **official Void Linux liv
 - hardware detection with matching drivers/firmware/services
 - everything required to apply chezmoi-managed dotfiles from a remote GitHub repository, including their bootstrap scripts
 
-The result is a **base system with a Wayfire desktop and one user account**. Wayfire, wf-shell and kitty provide a usable baseline without dotfiles.
+The result is a **base system with a Wayfire desktop and one user account**. Wayfire, wf-shell and kitty provide a usable baseline without dotfiles; greetd/tuigreet starts native sessions on tty7 while tty1 remains a recovery console.
 
 ### 1.1 Explicit non-goals (v1)
 
@@ -343,7 +343,7 @@ The function builds **one array**, `PKGS_ALL` (de-duplicated). xbps resolves eac
 
 **Always (all machines):**
 
-`base-system` `linux` `linux-firmware-network` `btrfs-progs` `grub-x86_64-efi` `grub-btrfs` `grub-btrfs-runit` `efibootmgr` `dosfstools` `snapper` `inotify-tools` `NetworkManager` `dbus` `elogind` `polkit` `chrony` `sudo` `bash-completion` `acpid` `alsa-utils` `void-repo-nonfree` `wayfire` `wf-shell` `kitty`
+`base-system` `linux` `linux-firmware-network` `btrfs-progs` `grub-x86_64-efi` `grub-btrfs` `grub-btrfs-runit` `efibootmgr` `dosfstools` `snapper` `inotify-tools` `NetworkManager` `dbus` `elogind` `polkit` `chrony` `sudo` `bash-completion` `acpid` `alsa-utils` `void-repo-nonfree` `wayfire` `wf-shell` `kitty` `greetd` `tuigreet`
 
 **Chezmoi toolchain (always; see section 13):**
 
@@ -752,6 +752,7 @@ enable_sv() {  # $1 = service, $2 = fatal|optional
 | `chronyd` | fatal | always |
 | `acpid` | fatal | always |
 | `grub-btrfs` | fatal | always |
+| `greetd` | fatal | always, tty7 |
 | `zramen` | fatal | `SWAP=zram` |
 | `tlp`, `upower` | optional | chassis laptop (not VM) |
 | `qemu-ga`, `spice-vdagentd` | optional | VM type qemu |
@@ -802,6 +803,18 @@ fail validation before partitioning; no separate XKB setting is exposed.
 The final target check verifies converted layout/variant/model against the
 installed XKB registry, native session, desktop executables and config owners.
 User overrides are allowed. Legacy targets without the marker remain repairable.
+
+The desktop step also configures greetd: keep the packaged greeter user
+(`_greeter` on Void), PAM and service scripts; set `[terminal] vt = 7` and
+`[default_session] command = "tuigreet --time --remember --remember-session --session-wrapper 'dbus-run-session --'"`.
+Preserve other TOML keys/comments, create `/var/cache/tuigreet` with mode 0755
+and greeter ownership, and remove only the enabled `agetty-tty7` symlink.
+Require and preserve `agetty-tty1`. Probe the greetd package/service before
+disk changes and enable greetd as a required service. Never alter Wayfire's
+native desktop file; F3 selects installed sessions and subsequent logins
+remember the last successful username/session. Final/repair checks validate
+TOML, wrapper, cache, PAM, executables and login service links. A separate
+`/etc/void-installer/greetd.conf` marker keeps older targets repairable.
 
 Step 19 installs the first-login hook when requested. Step 20 applies
 installation-time chezmoi when `CHEZMOI_MODE=install`; this step is isolated
@@ -1090,8 +1103,10 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-29 | Run `--repair /dev/vda2 --action check`, then password/GRUB/initramfs actions in a disposable VM | check reports target health; requested repair works; partition table and filesystem UUIDs remain unchanged |
 | T-27 | After first boot with network: `getent hosts voidlinux.org` and `cat /etc/resolv.conf` | name resolution works; `/etc/resolv.conf` is written by NetworkManager |
 
-| T-30 | Log in on tty1, start `dbus-run-session -- wayfire` with `KEYMAP=de-latin1-nodeadkeys` | panel/background and kitty launch work; German keyboard agrees with console; window controls and logout work |
+| T-30 | Log in through tuigreet on tty7, select native Wayfire session with `KEYMAP=de-latin1-nodeadkeys` | panel/background and kitty launch work; German keyboard agrees with console; window controls and logout work |
 | T-31 | Unattended install with an unsupported/custom KEYMAP | fails before partitioning with a supported-conversion diagnostic |
+
+| T-32 | Reboot, log in through tuigreet, log out, and log in again; Ctrl+Alt+F1 console login as root and user | native session has a D-Bus session bus; last username/session remembered; tty1 accepts both configured passwords; no tty7 agetty collision |
 
 ### 15.2 Phase 2 — physical laptop
 
@@ -1122,7 +1137,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 2. **Bash and `dialog`** (not POSIX sh, not whiptail).
 3. **Kernel:** `linux` meta-package, not LTS.
 4. **Root has an independently configured password** for console recovery; the regular user is in `wheel` with `sudo` (not doas).
-5. **Time sync:** `chrony`; **laptop power:** `tlp` + `upower`; **audio:** only `alsa-utils` (+ `sof-firmware` on Intel). Wayfire, wf-shell and kitty are installed by default; desktop extras remain optional dotfile additions.
+5. **Time sync:** `chrony`; **laptop power:** `tlp` + `upower`; **audio:** only `alsa-utils` (+ `sof-firmware` on Intel). Wayfire, wf-shell, kitty and greetd/tuigreet are installed by default; desktop extras remain optional dotfile additions.
 6. **zram:** `zramen`, zstd, 50 % of RAM, capped at 8192 MiB, priority 32767. Suppress informational startup messages on the login console (`ZRAMEN_QUIET=1`); warnings and errors remain visible.
 7. **btrfs options:** `noatime,compress=zstd:1,discard=async`.
 8. **No PAM changes** for fingerprint login; the user enrols manually.

@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.11"
+INSTALLER_VERSION="1.3.12"
 INSTALLER_TOTAL_STEPS=24
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
@@ -832,13 +832,13 @@ build_package_lists() {
   for p in base-system linux linux-firmware-network btrfs-progs grub-x86_64-efi \
            grub-btrfs grub-btrfs-runit efibootmgr dosfstools snapper inotify-tools \
            NetworkManager dbus elogind polkit chrony sudo bash-completion acpid \
-           alsa-utils void-repo-nonfree wayfire wf-shell kitty \
+           alsa-utils void-repo-nonfree wayfire wf-shell kitty greetd tuigreet \
            chezmoi git curl wget openssh gnupg age unzip xz tar rsync python3 \
            base-devel nano; do
     pkg_add "$p"
   done
 
-  SV_FATAL=(dbus elogind polkitd NetworkManager chronyd acpid grub-btrfs)
+  SV_FATAL=(dbus elogind polkitd NetworkManager chronyd acpid grub-btrfs greetd)
   SV_OPTIONAL=()
 
   if [[ $SWAP == zram ]]; then
@@ -944,7 +944,7 @@ probe_packages() {
   done
 
   local -a pairs=(dbus:dbus elogind:elogind polkit:polkitd \
-                  chrony:chronyd acpid:acpid)
+                  chrony:chronyd acpid:acpid greetd:greetd)
   if [[ $SWAP == zram ]]; then
     pairs+=(zramen:zramen)
   fi
@@ -1957,7 +1957,127 @@ SHELL_CONFIG_EOF
   }
   printf 'USERNAME=%s\nKEYMAP=%s\n' "$USERNAME" "$KEYMAP" > "$marker"
   chmod 0644 "$marker"
+  configure_greetd "$target"
   echo "Configured Wayfire and wf-shell; desktop keyboard: $XKB_LAYOUT ${XKB_VARIANT:-default}."
+}
+
+configure_greetd() {
+  local target=${1:-/mnt}
+  chroot "$target" python3 - <<'GREETD_CONFIG_EOF'
+import json
+import os
+import pathlib
+import pwd
+import re
+import tempfile
+import tomllib
+
+config = pathlib.Path("/etc/greetd/config.toml")
+cache = pathlib.Path("/var/cache/tuigreet")
+default = pathlib.Path("/etc/runit/runsvdir/default")
+marker = pathlib.Path("/etc/void-installer/greetd.conf")
+for path in (config.parent, cache, marker.parent):
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise SystemExit("Unsafe greetd configuration directory.")
+for path in (config, marker):
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise SystemExit("Unsafe greetd configuration destination.")
+original = config.read_text()
+parsed = tomllib.loads(original)
+greeter = parsed.get("default_session", {}).get("user")
+if not isinstance(greeter, str) or not greeter:
+    raise SystemExit("Packaged greetd configuration has no greeter account.")
+account = pwd.getpwnam(greeter)
+if account.pw_uid == 0:
+    raise SystemExit("The greetd greeter account must not be root.")
+if not (default / "agetty-tty1").is_symlink() or not (default / "agetty-tty1").is_dir():
+    raise SystemExit("tty1 recovery console is missing; refusing to configure greetd.")
+tty7 = default / "agetty-tty7"
+if not tty7.is_symlink() and tty7.exists():
+    raise SystemExit("tty7 has an unexpected service entry; refusing to remove it.")
+
+command = "tuigreet --time --remember --remember-session --session-wrapper 'dbus-run-session --'"
+# Change only the two managed keys; preserve the packaged user and comments.
+section = ""
+replaced = set()
+lines = []
+for line in original.splitlines(keepends=True):
+    header = re.match(r"^\s*\[([a-z_]+)\]\s*(?:#.*)?$", line)
+    if header:
+        section = header[1]
+    key = re.match(r"^\s*(vt|command)\s*=", line)
+    if key and (section, key[1]) in {("terminal", "vt"), ("default_session", "command")}:
+        value = "7" if key[1] == "vt" else json.dumps(command)
+        line = f"{key[1]} = {value}\n"
+        replaced.add((section, key[1]))
+    lines.append(line)
+if replaced != {("terminal", "vt"), ("default_session", "command")}:
+    raise SystemExit("Packaged greetd configuration is missing its terminal/session keys.")
+updated = "".join(lines)
+check = tomllib.loads(updated)
+if check["default_session"]["user"] != greeter:
+    raise SystemExit("greetd greeter account changed unexpectedly.")
+fd, name = tempfile.mkstemp(prefix=".config.", dir=config.parent)
+try:
+    with os.fdopen(fd, "w") as file:
+        file.write(updated)
+        os.fchmod(file.fileno(), 0o644)
+    os.replace(name, config)
+finally:
+    if os.path.exists(name):
+        os.unlink(name)
+cache.mkdir(exist_ok=True)
+os.chown(cache, account.pw_uid, account.pw_gid)
+cache.chmod(0o755)
+if tty7.is_symlink():
+    tty7.unlink()
+marker.write_text("VT=7\n")
+marker.chmod(0o644)
+GREETD_CONFIG_EOF
+}
+
+validate_greetd_installation() {
+  local target=${1:-/mnt}
+  [[ ! -L $target/etc/void-installer/greetd.conf ]] || { echo "Unsafe greetd marker." >&2; return 1; }
+  [[ -f $target/etc/void-installer/greetd.conf ]] || return 0  # legacy repair
+  chroot "$target" python3 - <<'GREETD_CHECK_EOF'
+import os
+import pathlib
+import pwd
+import shlex
+import tomllib
+
+with open("/etc/greetd/config.toml", "rb") as file:
+    config = tomllib.load(file)
+if config.get("terminal", {}).get("vt") != 7:
+    raise SystemExit("greetd must use tty7 to preserve tty1 recovery.")
+session = config.get("default_session", {})
+account = pwd.getpwnam(session["user"])
+if account.pw_uid == 0:
+    raise SystemExit("greetd must use its packaged non-root greeter account.")
+args = shlex.split(session.get("command", ""))
+if args != ["tuigreet", "--time", "--remember", "--remember-session",
+            "--session-wrapper", "dbus-run-session --"]:
+    raise SystemExit("greetd is missing the configured tuigreet D-Bus session wrapper.")
+cache = pathlib.Path("/var/cache/tuigreet")
+if cache.is_symlink() or not cache.is_dir():
+    raise SystemExit("tuigreet cache directory is missing or symlinked.")
+info = cache.stat()
+if (info.st_uid, info.st_gid, info.st_mode & 0o777) != (account.pw_uid, account.pw_gid, 0o755):
+    raise SystemExit("tuigreet cache has incorrect ownership or permissions.")
+default = pathlib.Path("/etc/runit/runsvdir/default")
+for service in ("agetty-tty1", "greetd"):
+    link = default / service
+    if not link.is_symlink() or not link.is_dir() or link.resolve() != pathlib.Path("/etc/sv") / service:
+        raise SystemExit(f"Required login service {service} is not enabled correctly.")
+if (default / "agetty-tty7").exists() or (default / "agetty-tty7").is_symlink():
+    raise SystemExit("agetty on tty7 conflicts with greetd.")
+for path in ("/usr/bin/greetd", "/usr/bin/tuigreet", "/etc/sv/greetd/run"):
+    if not os.access(path, os.X_OK):
+        raise SystemExit(f"Required greetd executable is missing: {path}")
+if not pathlib.Path("/etc/pam.d/greetd").is_file():
+    raise SystemExit("Packaged greetd PAM configuration is missing.")
+GREETD_CHECK_EOF
 }
 
 validate_desktop_installation() {
@@ -2514,6 +2634,7 @@ validate_target_installation() {
     return 1
   fi
   validate_desktop_installation
+  validate_greetd_installation
   echo "Installed boot files, services, sudo, and desktop configuration validated."
 }
 

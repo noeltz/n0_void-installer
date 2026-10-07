@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 source = pathlib.Path(__file__).resolve().parents[1] / "install.sh"
 text = source.read_text()
 derive = text[text.index("derive_desktop_keymap() {"):text.index("validate_one() {")]
-configure = text[text.index("write_desktop_user_file() {"):text.index("validate_desktop_installation() {")]
+configure = text[text.index("write_desktop_user_file() {"):text.index("configure_greetd() {")]
 validator = text.split("<<'DESKTOP_CHECK_EOF'\n", 1)[1].split("\nDESKTOP_CHECK_EOF", 1)[0]
 
 
@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix="void-desktop-regression-") as directory
     root = pathlib.Path(directory)
     config = root / "home/fixture/.config"
     config.mkdir(parents=True)
-    script = derive + configure + '\nUSERNAME=fixture\nKEYMAP=de-latin1-nodeadkeys\nchroot() { :; }\nconfigure_desktop "$1"\n'
+    script = derive + configure + '\nUSERNAME=fixture\nKEYMAP=de-latin1-nodeadkeys\nchroot() { :; }\nconfigure_greetd() { :; }\nconfigure_desktop "$1"\n'
     result = run(script, root)
     assert result.returncode == 0, result.stderr
     wayfire = config / "wayfire.ini"

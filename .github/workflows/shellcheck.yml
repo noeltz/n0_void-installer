@@ -30,5 +30,6 @@ jobs:
       - name: Desktop, state and resume regression checks
         run: |
           python3 tests/desktop-regression.py
+          python3 tests/greetd-regression.py
           python3 tests/installer-state-regression.py
           python3 tests/resume-repair-regression.py
