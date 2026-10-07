@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.13"
+INSTALLER_VERSION="1.3.14"
 INSTALLER_TOTAL_STEPS=24
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
@@ -838,7 +838,7 @@ build_package_lists() {
     pkg_add "$p"
   done
 
-  SV_FATAL=(dbus elogind polkitd NetworkManager chronyd acpid grub-btrfs greetd)
+  SV_FATAL=(dbus polkitd NetworkManager chronyd acpid grub-btrfs greetd)
   SV_OPTIONAL=()
 
   if [[ $SWAP == zram ]]; then
@@ -943,7 +943,12 @@ probe_packages() {
     fi
   done
 
-  local -a pairs=(dbus:dbus elogind:elogind polkit:polkitd \
+  if ! probe_query -f elogind | grep -F "usr/share/dbus-1/system-services/org.freedesktop.login1.service" >/dev/null; then
+    echo "Package elogind does not provide the org.freedesktop.login1 D-Bus activation file." >&2
+    exit 3
+  fi
+
+  local -a pairs=(dbus:dbus polkit:polkitd \
                   chrony:chronyd acpid:acpid greetd:greetd)
   if [[ $SWAP == zram ]]; then
     pairs+=(zramen:zramen)
@@ -1813,6 +1818,25 @@ EOF
   done
 }
 
+validate_elogind_activation() {
+  local target_root=${1:-/mnt}
+  local activation_file="$target_root/usr/share/dbus-1/system-services/org.freedesktop.login1.service"
+  if [[ ! -s $activation_file ]]; then
+    echo "Elogind's org.freedesktop.login1 D-Bus activation file is missing from the target." >&2
+    return 1
+  fi
+}
+
+validate_enabled_services() {
+  local target_root=${1:-/mnt} svc
+  for svc in "${SV_FATAL[@]}"; do
+    if [[ ! -L $target_root/etc/runit/runsvdir/default/$svc || ! -d $target_root/etc/sv/$svc ]]; then
+      echo "Required runit service $svc is not enabled in the installed system." >&2
+      return 1
+    fi
+  done
+}
+
 create_user() {
   local account_status status_name status_code _status_details
   if ! chroot /mnt id -u "$USERNAME" >/dev/null 2>&1; then
@@ -2671,12 +2695,12 @@ run_repair() {
   mount_existing_layout
   mount_target_bindings
   ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PARTITION")
-  SV_FATAL=(dbus elogind polkitd NetworkManager chronyd acpid grub-btrfs)
+  SV_FATAL=(dbus polkitd NetworkManager chronyd acpid grub-btrfs)
   run_repair_action
 }
 
 validate_target_installation() {
-  local mountpoint expected_uuid kernel kernel_version found_kernel=0 found_efi=0 svc
+  local mountpoint expected_uuid kernel kernel_version found_kernel=0 found_efi=0
   for mountpoint in / /home /.snapshots /var/log /var/cache/xbps /var/tmp; do
     expected_uuid=$ROOT_UUID
     if ! awk -v uuid="UUID=$expected_uuid" -v mountpoint="$mountpoint" '$1 == uuid && $2 == mountpoint { found=1 } END { exit !found }' /mnt/etc/fstab; then
@@ -2711,6 +2735,7 @@ validate_target_installation() {
     echo "GRUB EFI executable is missing from the EFI partition." >&2
     return 1
   fi
+  validate_elogind_activation /mnt
   if [[ -f /mnt/etc/NetworkManager/system-connections/installer-wifi.nmconnection ]]; then
     if ! chroot /mnt nmcli --offline connection modify type wifi \
         < /mnt/etc/NetworkManager/system-connections/installer-wifi.nmconnection >/dev/null 2>&1; then
@@ -2722,12 +2747,7 @@ validate_target_installation() {
     echo "EFI removable-media fallback executable is missing." >&2
     return 1
   fi
-  for svc in "${SV_FATAL[@]}"; do
-    if [[ ! -L /mnt/etc/runit/runsvdir/default/$svc || ! -d /mnt/etc/sv/$svc ]]; then
-      echo "Required runit service $svc is not enabled in the installed system." >&2
-      return 1
-    fi
-  done
+  validate_enabled_services /mnt
   if ! chroot /mnt visudo -c; then
     echo "Installed sudo configuration failed validation." >&2
     return 1

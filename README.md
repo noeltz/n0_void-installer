@@ -31,6 +31,11 @@ against the mounted target before package installation.
 The desktop baseline works without dotfiles. Existing user configuration files
 are preserved if desktop configuration is retried.
 
+The `elogind` package is installed, and system D-Bus starts it on demand from
+the packaged `org.freedesktop.login1` activation file. The packaged elogind
+runit service remains available for eager startup if D-Bus activation causes
+problems; enable it with `sudo ln -s /etc/sv/elogind /var/service/`.
+
 ## Requirements
 
 - the **official Void Linux live ISO (glibc, x86_64)**, booted in **UEFI**
@@ -114,6 +119,17 @@ so you can read the result. First console login can run the same setup; shared
 state and locking prevent it from being applied twice. If it fails or is
 interrupted, open a terminal and run `void-installer-chezmoi --retry`.
 Set `CHEZMOI_MODE=install` to use installation-time setup instead.
+
+On systems installed with a version earlier than 1.3.14, remove the old
+elogind service link once and reboot so D-Bus can activate the existing
+package as needed:
+
+```sh
+sudo unlink /var/service/elogind
+sudo reboot
+```
+
+Keep both the `elogind` package and the `dbus` service installed and enabled.
 
 For Wi-Fi-only devices, configure an optional SSID and WPA-Personal password
 in `install.conf` (or choose a network interactively). The installer writes a

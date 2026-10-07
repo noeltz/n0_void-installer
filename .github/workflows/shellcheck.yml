@@ -29,7 +29,7 @@ jobs:
               subprocess.run(['shellcheck', str(path)], check=True)
           PY
 
-      - name: Desktop, state and resume regression checks
+      - name: Desktop, state, resume and elogind regression checks
         run: |
           python3 tests/desktop-regression.py
           python3 tests/greetd-regression.py
@@ -37,3 +37,4 @@ jobs:
           python3 tests/graphical-chezmoi-regression.py
           python3 tests/installer-state-regression.py
           python3 tests/resume-repair-regression.py
+          python3 tests/elogind-dbus-regression.py

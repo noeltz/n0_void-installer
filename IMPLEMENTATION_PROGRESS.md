@@ -12,6 +12,7 @@ recovery action are recorded here.
 | Wayfire, wf-shell, kitty and synchronized keyboard | 1.3.11 | Complete; pushed | Commit `83dc0f6`; all regressions, ShellCheck and syntax pass. |
 | Greetd and tuigreet on tty7 | 1.3.12 | Complete; pushed | Commit `9bb6160`; Greetd/desktop and existing regressions, bootstrap, ShellCheck and syntax pass. |
 | Graphical first-login chezmoi | 1.3.13 | Complete; pushed | Commit `20e727d`; all eleven regressions, installer/three helper ShellCheck, syntax/help/diff checks pass. |
+| Stop duplicate elogind startup | 1.3.14 | Implemented; local verification complete | All eleven portable regressions, syntax and diff checks pass. ShellCheck runs in CI after push; VM acceptance is pending because this workspace has no QEMU runner. |
 
 Decisions: install only the five requested packages and their dependencies;
 greetd uses tty7, tty1 remains a recovery console; derive Wayfire XKB settings
