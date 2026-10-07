@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.14"
+INSTALLER_VERSION="1.3.15"
 INSTALLER_TOTAL_STEPS=24
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
@@ -833,6 +833,7 @@ build_package_lists() {
            grub-btrfs grub-btrfs-runit efibootmgr dosfstools snapper inotify-tools \
            NetworkManager dbus elogind polkit chrony sudo bash-completion acpid \
            alsa-utils void-repo-nonfree wayfire wf-shell kitty greetd tuigreet \
+           dejavu-fonts-ttf adwaita-icon-theme \
            chezmoi git curl wget openssh gnupg age unzip xz tar rsync python3 \
            base-devel nano; do
     pkg_add "$p"
@@ -1901,7 +1902,10 @@ write_desktop_user_file() {  # $1 = target root, $2 = path inside target; stdin 
 }
 
 configure_desktop() {  # optional target root for regression fixtures
-  local target=${1:-/mnt} config path
+  local target=${1:-/mnt} config path panel_widgets="tray network clock"
+  if [[ ${HW_CHASSIS_RESULT:-} == laptop ]]; then
+    panel_widgets="tray network battery clock"
+  fi
   config="$target/home/$USERNAME/.config"
   derive_desktop_keymap "$KEYMAP"
   for path in "$target/home/$USERNAME" "$config" "$target/etc/void-installer"; do
@@ -1960,11 +1964,11 @@ with_win_right = <ctrl> <super> <shift> KEY_RIGHT
 [wayfire-shell]
 toggle_menu = <super>
 DESKTOP_EOF
-  write_desktop_user_file "$target" "/home/$USERNAME/.config/wf-shell.ini" <<'SHELL_CONFIG_EOF'
+  write_desktop_user_file "$target" "/home/$USERNAME/.config/wf-shell.ini" <<SHELL_CONFIG_EOF
 [panel]
 widgets_left = menu spacing4 launchers window-list
 widgets_center = none
-widgets_right = tray network battery clock
+widgets_right = $panel_widgets
 position = top
 autohide = false
 minimal_height = 28
@@ -2119,13 +2123,14 @@ validate_desktop_installation() {
     echo "Invalid desktop installation user." >&2; return 1;
   }
   derive_desktop_keymap "$desktop_keymap"
-  for program in wayfire wf-panel wf-background wayland-logout kitty dbus-run-session; do
+  for program in wayfire wf-panel wf-background wayland-logout kitty dbus-run-session fc-match; do
     [[ -x $target/usr/bin/$program ]] || { echo "Desktop executable $program is missing." >&2; return 1; }
   done
   chroot "$target" python3 - "$desktop_user" "$XKB_LAYOUT" "$XKB_VARIANT" "$XKB_MODEL" <<'DESKTOP_CHECK_EOF'
 import configparser
 import os
 import pwd
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
@@ -2141,7 +2146,39 @@ session = configparser.ConfigParser(interpolation=None)
 session.read("/usr/share/wayland-sessions/wayfire.desktop")
 if session.get("Desktop Entry", "Exec", fallback="") != "wayfire":
     sys.exit("Wayfire's native desktop session is missing or invalid.")
-uid = pwd.getpwnam(user).pw_uid
+account = pwd.getpwnam(user)
+uid = account.pw_uid
+# Query the user's Fontconfig configuration without inheriting live-ISO overrides.
+# File readability must also be checked with the user's privileges.
+font_check = r'''
+import os
+import subprocess
+import sys
+for family in ("sans", "monospace"):
+    match = subprocess.run(["/usr/bin/fc-match", "-f", "%{file}\\n%{scalable}\\n%{spacing}\\n", family],
+                           text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    fields = match.stdout.splitlines()
+    if (match.returncode != 0 or len(fields) < 2 or not fields[0]
+            or not os.path.isfile(fields[0]) or not os.access(fields[0], os.R_OK)
+            or fields[1].lower() != "true"
+            or (family == "monospace" and (len(fields) < 3 or fields[2] != "100"))):
+        sys.exit(f"No usable {family} font. Install dejavu-fonts-ttf and run fc-cache -f.")
+'''
+try:
+    fonts = subprocess.run(
+        [sys.executable, "-c", font_check],
+        user=uid, group=account.pw_gid, extra_groups=os.getgrouplist(user, account.pw_gid),
+        env={"PATH": "/usr/bin:/bin", "HOME": account.pw_dir,
+             "XDG_CONFIG_HOME": os.path.join(account.pw_dir, ".config")},
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=70)
+except (OSError, subprocess.TimeoutExpired) as error:
+    sys.exit(f"Desktop font validation failed: {error}")
+if fonts.returncode != 0:
+    sys.exit(fonts.stderr.strip() or "Desktop font validation failed.")
+for path in ("/usr/share/icons/Adwaita/index.theme",
+             "/usr/share/icons/Adwaita/scalable/status/image-missing.svg"):
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        sys.exit("Desktop icon assets are missing. Install adwaita-icon-theme.")
 for name in ("wayfire.ini", "wf-shell.ini"):
     path = f"/home/{user}/.config/{name}"
     if os.path.islink(path) or not os.path.isfile(path) or os.stat(path).st_uid != uid:
@@ -2149,6 +2186,14 @@ for name in ("wayfire.ini", "wf-shell.ini"):
     config = configparser.ConfigParser(interpolation=None, strict=False)
     with open(path) as file:
         config.read_file(file)
+    if name == "wf-shell.ini":
+        battery = any("battery" in config.get(section, option, fallback="").split()
+                      for section in config.sections()
+                      if section == "panel" or section.startswith("panel:")
+                      for option in ("widgets_left", "widgets_center", "widgets_right"))
+        if battery and (not os.access("/usr/libexec/upowerd", os.X_OK)
+                        or not os.path.isfile("/usr/share/dbus-1/system-services/org.freedesktop.UPower.service")):
+            sys.exit("Panel battery widget requires UPower. Install upower or remove the battery widget.")
     if name == "wayfire.ini" and os.path.exists("/usr/local/sbin/void-installer-chezmoi-gui"):
         if ("autostart" not in config.get("core", "plugins", fallback="").split()
                 or config.get("autostart", "void_installer_chezmoi", fallback="")

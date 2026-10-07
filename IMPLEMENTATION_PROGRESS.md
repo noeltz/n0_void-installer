@@ -13,10 +13,21 @@ recovery action are recorded here.
 | Greetd and tuigreet on tty7 | 1.3.12 | Complete; pushed | Commit `9bb6160`; Greetd/desktop and existing regressions, bootstrap, ShellCheck and syntax pass. |
 | Graphical first-login chezmoi | 1.3.13 | Complete; pushed | Commit `20e727d`; all eleven regressions, installer/three helper ShellCheck, syntax/help/diff checks pass. |
 | Stop duplicate elogind startup | 1.3.14 | Complete; pushed | Commit `0b0cefe`; all eleven portable regressions, syntax, diff checks and ShellCheck pass (CI run `37613486871`). VM acceptance is pending because this workspace has no QEMU runner. |
+| Desktop fonts, icons and matching battery dependencies | 1.3.15 | Implemented; verified locally | All eleven portable regressions, syntax/help/diff checks and installer/three-helper ShellCheck 0.9.0 and 0.11.0 pass. Real host Fontconfig accepts the production font check. QEMU acceptance pending. |
 
-Decisions: install only the five requested packages and their dependencies;
+Decisions: use Wayfire, wf-shell, kitty, greetd and tuigreet with required runtime assets;
 greetd uses tty7, tty1 remains a recovery console; derive Wayfire XKB settings
 from KEYMAP without a separate setting; open first-login setup in kitty.
+
+- Release 1.3.15 corrects missing runtime assets: explicitly install DejaVu
+  fonts and Adwaita icons, and include the battery widget only for the laptop
+  profile that installs UPower. Final/repair checks query fonts as the desktop
+  user and check icon and configured battery dependencies. Existing configs
+  stay preserved; the README documents recovery without reinstalling.
+- User QEMU diagnosis: Wayfire and wf-background run, Kitty and wf-panel do
+  not; `fc-list` is empty and no UPower package version was reported. Missing
+  fonts are confirmed; the panel's exact failure needs runtime error output
+  if restoring assets and correcting the battery widget does not resolve it.
 
 - Increment 1 inspection found that fresh config loading cleared passwords;
   secret clearing was moved to resume; fresh configured secrets are covered by a regression.
@@ -33,7 +44,7 @@ from KEYMAP without a separate setting; open first-login setup in kitty.
 - Both ShellCheck 0.9.0 and 0.11.0 pass for the installer and all three embedded scripts. Affected boot/desktop/greetd/resume/chezmoi/graphical regressions pass.
 - The next remote CI run passed all lint and exposed a fixture portability issue: its optional host-registry check used Ubuntu XKB, which lacks Void’s ABNT2 model. That additional host check now runs only on Void; deterministic target fixtures still run everywhere, and the actual target registry check remains mandatory during installation. Local desktop regression passes. All representative conversions were additionally verified against the actual `xkeyboard-config-2.48_1` archive from the configured Void mirror, including ABNT2.
 - Final CI compatibility commits `8f1f95a`, `614b482` and `f092213` are pushed. [GitHub CI for `f092213`](https://github.com/noeltz/n0_void-installer/actions/runs/37609687833) passed installer lint, all generated-helper lint and the six portable regression scripts. All eleven local regression scripts passed.
-- Current next action: fresh VM acceptance T-30–T-33. Implementation and automated verification are complete; no unresolved failure remains.
+- Current next action: fresh VM acceptance T-30–T-33 and recovery of the reported QEMU desktop. Implementation and automated verification are complete; graphical runtime verification remains pending.
 - VM acceptance: T-30–T-33 pending; this workspace has no VM runner. Use a fresh install for desktop/greetd/first-login acceptance. Resume still requires the exact initiating version.
 
 Implementation is split into seven independently reviewed releases. A later

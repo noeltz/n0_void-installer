@@ -343,7 +343,7 @@ The function builds **one array**, `PKGS_ALL` (de-duplicated). xbps resolves eac
 
 **Always (all machines):**
 
-`base-system` `linux` `linux-firmware-network` `btrfs-progs` `grub-x86_64-efi` `grub-btrfs` `grub-btrfs-runit` `efibootmgr` `dosfstools` `snapper` `inotify-tools` `NetworkManager` `dbus` `elogind` `polkit` `chrony` `sudo` `bash-completion` `acpid` `alsa-utils` `void-repo-nonfree` `wayfire` `wf-shell` `kitty` `greetd` `tuigreet`
+`base-system` `linux` `linux-firmware-network` `btrfs-progs` `grub-x86_64-efi` `grub-btrfs` `grub-btrfs-runit` `efibootmgr` `dosfstools` `snapper` `inotify-tools` `NetworkManager` `dbus` `elogind` `polkit` `chrony` `sudo` `bash-completion` `acpid` `alsa-utils` `void-repo-nonfree` `wayfire` `wf-shell` `kitty` `greetd` `tuigreet` `dejavu-fonts-ttf` `adwaita-icon-theme`
 
 **Chezmoi toolchain (always; see section 13):**
 
@@ -807,6 +807,11 @@ It uses the packaged native Wayfire session unchanged and registers the
 managed user/keymap in `/etc/void-installer/desktop.conf` for repair checks.
 Existing user configuration is preserved on retry.
 
+The baseline installs DejaVu fonts and Adwaita icons. The panel's right widgets
+are `tray network clock` on desktops and VMs; only the laptop hardware profile
+that installs UPower adds `battery` before `clock`. Keep native wf-shell
+autostart enabled; do not add duplicate panel/background launch commands.
+
 Derive XKB layout/variant/model from KEYMAP using an explicit table in
 `derive_desktop_keymap`: US, UK, German (including nodeadkeys), Swiss German
 and French, French (including latin9 and Bepo), Brazilian ABNT2, US Dvorak
@@ -817,6 +822,19 @@ fail validation before partitioning; no separate XKB setting is exposed.
 The final target check verifies converted layout/variant/model against the
 installed XKB registry, native session, desktop executables and config owners.
 User overrides are allowed. Legacy targets without the marker remain repairable.
+
+Final and repair checks require `fc-match` and execute font validation as the
+configured user inside the target, with that user's HOME/XDG_CONFIG_HOME and
+without inherited live-ISO Fontconfig overrides. Require nonempty Sans and
+monospace matches, readable font files, scalable faces and monospace spacing
+100. Require nonempty Adwaita `index.theme` and missing-image fallback assets.
+If any panel or output-specific panel widget list contains the `battery` token,
+require executable `/usr/libexec/upowerd` and its packaged
+`org.freedesktop.UPower` system D-Bus activation file. Report how to install
+the missing dependency or remove the widget; never rewrite existing user
+settings during a check. No UPower runit link is required by this check.
+For installations before 1.3.15, document installing fonts/icons, refreshing
+the font cache, removing `battery` when UPower is absent, and logging in again.
 
 The desktop step also configures greetd: keep the packaged greeter user
 (`_greeter` on Void), PAM and service scripts; set `[terminal] vt = 7` and
@@ -1133,10 +1151,10 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-29 | Run `--repair /dev/vda2 --action check`, then password/GRUB/initramfs actions in a disposable VM | check reports target health; requested repair works; partition table and filesystem UUIDs remain unchanged |
 | T-27 | After first boot with network: `getent hosts voidlinux.org` and `cat /etc/resolv.conf` | name resolution works; `/etc/resolv.conf` is written by NetworkManager |
 
-| T-30 | Log in through tuigreet on tty7, select native Wayfire session with `KEYMAP=de-latin1-nodeadkeys` | panel/background and kitty launch work; German keyboard agrees with console; window controls and logout work |
+| T-30 | Log in through tuigreet on tty7, select native Wayfire session with `KEYMAP=de-latin1-nodeadkeys` | panel/background appear with readable text/icons; `fc-list` is nonempty; kitty opens through Super+Enter and panel launcher; VM/desktop panel omits battery; German keyboard agrees with console; window controls and logout work |
 | T-31 | Unattended install with an unsupported/custom KEYMAP | fails before partitioning with a supported-conversion diagnostic |
 
-| T-32 | Reboot, log in through tuigreet, log out, and log in again; Ctrl+Alt+F1 console login as root and user | native session has a D-Bus session bus; last username/session remembered; tty1 accepts both configured passwords; no tty7 agetty collision |
+| T-32 | Reboot, log in through tuigreet, log out, and log in again; Ctrl+Alt+F1 console login as root and user | native session has a D-Bus session bus; exactly one wf-panel and wf-background for the desktop user each login; last username/session remembered; tty1 accepts both configured passwords; no tty7 agetty collision |
 
 | T-33 | Complete first-login GUI setup, log out/in; also log in on tty1; test failed/interrupted run and manual `--retry` | completion suppresses later setup; no concurrent GUI/tty application; failed/interrupted setup needs explicit retry; kitty keeps output visible |
 

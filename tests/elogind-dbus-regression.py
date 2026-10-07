@@ -25,7 +25,6 @@ activation_check = section("validate_elogind_activation() {", "run_repair_action
 repair = section("run_repair() {", "validate_target_installation() {")
 validator = section("validate_target_installation() {", "bootstrap_prepare() {")
 
-assert 'INSTALLER_VERSION="1.3.14"' in text
 assert ('if ! probe_query -f elogind | grep -F '
         '"usr/share/dbus-1/system-services/org.freedesktop.login1.service" >/dev/null; then' in probe)
 assert "elogind:elogind" not in probe

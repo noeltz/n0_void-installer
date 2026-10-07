@@ -28,7 +28,8 @@ temporary isolated cache before disk changes. The installer removes that
 cache after probing and still performs full dependency and disk-space planning
 against the mounted target before package installation.
 
-The desktop baseline works without dotfiles. Existing user configuration files
+The desktop baseline includes DejaVu text/monospace fonts and Adwaita icons,
+and works without dotfiles. Existing user configuration files
 are preserved if desktop configuration is retried.
 
 The `elogind` package is installed, and system D-Bus starts it on demand from
@@ -108,7 +109,8 @@ their native session files. To start Wayfire manually from the console, use
 `dbus-run-session -- wayfire`.
 Super+Enter opens kitty, Super+Q closes a window, Alt+Tab switches windows,
 Super+arrow tiles windows, and Super+Escape logs out. The panel also provides
-an application menu, kitty launcher, network status, battery and clock.
+an application menu, kitty launcher, network status and clock. The battery
+widget is included on laptops, where the installer also installs UPower.
 `KEYMAP` controls both console and desktop layouts. Common named console maps
 (including German, French, British, Brazilian and Dvorak) have explicit XKB
 conversions; unknown or custom maps are rejected before disk changes.
@@ -130,6 +132,37 @@ sudo reboot
 ```
 
 Keep both the `elogind` package and the `dbus` service installed and enabled.
+
+### Recovery if Kitty or the panel does not open
+
+Versions before 1.3.15 did not explicitly install desktop fonts or icons and
+enabled the battery widget even on VMs and desktops without UPower. An empty
+`fc-list` indicates that Fontconfig cannot find any fonts; Kitty requires a
+usable monospace font. From tty1, install the missing desktop assets:
+
+```sh
+sudo xbps-install -S dejavu-fonts-ttf adwaita-icon-theme
+fc-cache -f
+fc-match sans
+fc-match monospace
+```
+
+On a VM or desktop without UPower, back up `~/.config/wf-shell.ini` and remove
+only the `battery` token from its panel widget lists. For the installer baseline,
+the resulting setting is:
+
+```ini
+widgets_right = tray network clock
+```
+
+On a laptop, keep the battery widget and install `upower` if missing; its
+packaged system D-Bus activation file allows it to start on demand. Existing
+user configs are preserved by the installer, so this correction is manual.
+Return to Wayfire, log out with Super+Escape, and log in through tuigreet again.
+Verify the panel and open Kitty with Super+Enter or the panel launcher. If
+Kitty opens but the panel still does not, run `wf-panel` from Kitty and retain
+its error output for diagnosis. The missing-font finding does not establish
+the exact cause of every panel startup failure.
 
 For Wi-Fi-only devices, configure an optional SSID and WPA-Personal password
 in `install.conf` (or choose a network interactively). The installer writes a
