@@ -129,7 +129,7 @@ The installer MUST be a single file so it can be fetched on the live ISO with on
 - Shebang `#!/bin/bash`, first executable lines: `set -Eeuo pipefail`.
 - All logic in functions; the last line of the file is `main "$@"`.
 - Function names (fixed, so the call graph is predictable): `main`, `parse_args`, `load_config`, `preflight`, `detect_hardware`, `build_package_lists`, `probe_packages`, `choose_disk`, `prompt_missing`, `validate_all`, `confirm`, `partition_disk`, `format_disk`, `mount_layout`, `bootstrap_system`, `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user`, `apply_chezmoi`, `install_wrappers`, `initial_snapshot`, `finalize`, `cleanup`.
-- Progress output: one line per step, format `==> [N/17] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Non-interactive step output is shown and saved to the sanitized log. Dialog and arbitrary chezmoi output are excluded.
+- Progress output: one line per step, format `==> [N/23] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Non-interactive step output is shown and saved to the sanitized log. Dialog and arbitrary chezmoi output are excluded.
 - Quote every variable expansion. Use `[[ ]]` for tests. ShellCheck MUST pass with no warnings (disable directives only with a comment explaining why). The embedded heredocs (wrapper, config snippets) are invisible to ShellCheck: CI MUST extract script-type heredocs to temporary files and run ShellCheck on them separately.
 - **ERR-trap discipline (binding).** Under `set -Eeuo pipefail`, expected failures would trigger the ERR trap and be reported as exit 1. Every command whose failure is an expected path MUST be guarded and mapped to its specified exit code:
   ```bash
@@ -179,6 +179,8 @@ Host tools are **not** installed. The ISO's base-system ships everything the ins
 
 ```
 install.sh [--config FILE] [--yes] [--help]
+install.sh --resume ROOT_PARTITION
+install.sh --repair ROOT_PARTITION [--action check|chroot|password|grub|initramfs] [--user USER]
 ```
 
 | Option | Meaning |
@@ -186,6 +188,8 @@ install.sh [--config FILE] [--yes] [--help]
 | `--config FILE` | Read settings from `FILE` (section 6). If omitted and `./install.conf` exists, use it. Otherwise no file is read |
 | `--yes` | **Unattended mode.** No dialogs, no confirmation key. Every value without a default MUST be present in the config (else exit 2). `TARGET_DISK` MUST be set explicitly |
 | `--help` | Print usage, exit 0 |
+| `--resume ROOT_PARTITION` | Continue an incomplete install only after validating its versioned state, root UUID, EFI UUID, and parent disk. Never partitions or formats. Prompts for unfinished password secrets excluded from saved state. |
+| `--repair ROOT_PARTITION` | Mount an existing system without formatting. Offers check, chroot, password, GRUB, or initramfs actions. `--action` selects directly; `--user` selects an account for `password` (including `root`). |
 
 Any other argument: print usage, exit 2.
 
@@ -432,11 +436,11 @@ UUIDs from `blkid -s UUID -o value "$(part 2)"` and `"$(part 1)"`.
 
 ## 10. Installation sequence
 
-Pre-step state: preflight passed, live tools installed, config loaded, values validated. Steps are numbered for the progress output (`==> [N/17]`). **Steps 1–7 never modify any disk.** The destructive part starts at step 9.
+Pre-step state: preflight passed, live tools installed, config loaded, values validated. Steps are numbered for the progress output (`==> [N/23]`). **Steps 1–7 never modify any disk.** The destructive part starts at step 9.
 
 Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and `trap 'on_error $LINENO' ERR`):
 - `on_error` prints `Installation failed at step N (<name>), line L.` to stderr and exits 1.
-- `cleanup` (runs on every exit): removes `/mnt/etc/sudoers.d/99-installer` if present; `umount -R /mnt 2>/dev/null || true`; nothing else. No retry, no resume. A re-run always starts at step 1 and wipes the disk again.
+- `cleanup` (runs on every exit): preserves the sanitized installer log, removes only installer-owned temporary files, and unmounts mounts recorded by this run in reverse order. It never removes unrelated mounts.
 
 | # | Function | Action |
 |---|---|---|
@@ -452,11 +456,17 @@ Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and 
 | 10 | `format_disk`, `mount_layout` | 10.3, 10.4 |
 | 11 | `bootstrap_system` (prepare) | 10.5 (includes full validation against /mnt) |
 | 12 | `bootstrap_system` (install) | 10.6 |
-| 13 | `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user` | Sections 10.7–10.11 |
-| 14 | `apply_chezmoi` | Section 13 |
-| 15 | `install_wrappers`, `initial_snapshot` | Sections 12, 10.13 |
-| 16 | `validate_target_installation` | Installed-system checks |
-| 17 | `finalize` | 10.14 |
+| 13 | `configure_system` | 10.7 |
+| 14 | `setup_snapper` | 10.8 |
+| 15 | `setup_grub` | 10.9 |
+| 16 | `enable_services` | 10.10 |
+| 17 | `create_user` | 10.11 |
+| 18 | `configure_chezmoi_first_login` | 10.12 |
+| 19 | `apply_chezmoi` | 10.12 |
+| 20 | `install_wrappers` | 10.13 |
+| 21 | `initial_snapshot` | 10.13 |
+| 22 | `validate_target_installation` | 10.14 |
+| 23 | `finalize` | 10.15 |
 
 ### 10.1 Step 7 — package probe
 
@@ -772,7 +782,11 @@ account name and status as whitespace-separated fields; do not require aging
 fields or a trailing space after `P`. On failure, report only the status code,
 never the password or hash.
 
-### 10.12 (reserved for section 13: chezmoi)
+### 10.12 chezmoi setup and application
+
+Step 18 installs the first-login hook when requested. Step 19 applies
+installation-time chezmoi when `CHEZMOI_MODE=install`; this step is isolated
+because dotfile bootstrap commands may make arbitrary target changes.
 
 ### 10.13 `initial_snapshot` (in chroot, after wrappers are installed)
 
@@ -786,7 +800,8 @@ grub-mkconfig -o /boot/grub/grub.cfg
 ```bash
 rm -f /mnt/etc/sudoers.d/99-installer     # temporary NOPASSWD rule (section 13)
 rm -f /mnt/etc/resolv.conf                # NetworkManager manages it at boot
-umount -R /mnt
+preserve_install_log
+unmount_owned
 sync
 ```
 
@@ -797,6 +812,26 @@ Installation complete. Remove the installation medium and reboot.
 ```
 
 plus the informational lines from 8.2 (nvidia / fingerprint) and, if chezmoi failed, the chezmoi warning from section 13. The installer does **not** reboot by itself. Exit 0.
+
+### 10.15 Resume and repair
+
+The state manifest at `/var/lib/void-installer/state` is written atomically
+with mode 0600 inside a mode-0700 directory. It contains the installer
+version, root and EFI UUIDs, parent disk, completed step/name, status, and
+non-secret settings. Passwords and Wi-Fi credentials are never stored there.
+`--resume ROOT_PARTITION` requires an active manifest from this installer
+version, validates its checkpoint and device identities, then runs only later
+steps. It mounts the existing subvolumes and never calls partition or format
+operations. Partial package transactions are audited with `xbps-pkgdb -a`
+before retrying. Passwords needed by unfinished account or Wi-Fi steps are
+prompted again. Resume stops if installation-time chezmoi was interrupted.
+
+`--repair ROOT_PARTITION` mounts the standard subvolume layout and offers a
+system check, target chroot, account password reset, GRUB reinstall, or
+initramfs regeneration. These actions never partition, format, or create
+accounts. Both modes require all partitions on the target disk to be
+unmounted and `/mnt` to be clear. Cleanup unmounts only paths mounted by the
+current run.
 
 ---
 
@@ -830,7 +865,7 @@ install -Dm0755 wrapper /mnt/usr/local/bin/xbps-remove
 
 The script derives its behavior from `${0##*/}`. `/usr/local/bin` precedes `/usr/bin` in Void's default `PATH` and in `sudo`'s `secure_path`; acceptance test T-9 verifies this.
 
-The wrappers are installed in step 15, **after** the chezmoi step and **after** all package installs of the installer, so nothing during installation triggers snapshots.
+The wrappers are installed in step 20, **after** the chezmoi step and **after** all package installs of the installer, so nothing during installation triggers snapshots.
 
 ### 12.2 Wrapper source (binding; embed verbatim)
 
@@ -975,11 +1010,11 @@ Rationale: bootstrap scripts may assume a running system (running runit, session
 
 ## 14. Safety rules (binding)
 
-1. Nothing destructive happens before the confirmation (interactive) or before step 9 (`--yes`). The probe in step 7 guarantees packages resolve before the disk is wiped. Full dependency and disk-space validation runs in step 11 against the mounted target.
+1. Fresh-install disk changes happen only after confirmation (interactive) or at step 9 (`--yes`). Resume and repair mount only the explicitly selected existing root partition and never invoke partitioning or formatting. The probe in step 7 guarantees packages resolve before a fresh-install disk is wiped. Full dependency and disk-space validation runs in step 11 against the mounted target.
 2. The target disk is never chosen automatically and never from a default.
 3. Only whole-disk install exists; the script MUST NOT touch any other disk.
-4. Secrets (passwords) are never written to disk by the installer outside `/etc/shadow` (via `chpasswd`), never echoed, never in the process list.
-5. `/mnt` is unmounted (`umount -R /mnt`) on every exit path.
+4. Passwords are never written by the installer outside `/etc/shadow` (via `chpasswd`), never echoed, never in the process list, and never saved in installer state or logs. An explicitly configured Wi-Fi PSK is stored only in its root-only NetworkManager keyfile.
+5. Installer-owned mounts are unmounted in reverse order on every exit path; unrelated mounts are left alone.
 6. The ESP is mounted with `umask=0077` and the btrfs `/.snapshots` has mode `750`.
 
 ---
@@ -1032,6 +1067,8 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-24 | Run the installer a second time on the already installed disk | wipes cleanly, installs again, exit 0 |
 | T-25 | `TARGET_DISK=/dev/disk/by-id/<qcow2 disk>` | normalised, install completes |
 | T-26 | Config with `$` in a value other than the hash, e.g. `HOSTNAME='a$b'` | rejected by validation (exit 2), never expanded |
+| T-28 | Interrupt a test VM install after a saved checkpoint, boot the ISO, run `--resume /dev/vda2` | saved version and UUIDs are checked; only unfinished steps run; the system boots and both accounts work |
+| T-29 | Run `--repair /dev/vda2 --action check`, then password/GRUB/initramfs actions in a disposable VM | check reports target health; requested repair works; partition table and filesystem UUIDs remain unchanged |
 | T-27 | After first boot with network: `getent hosts voidlinux.org` and `cat /etc/resolv.conf` | name resolution works; `/etc/resolv.conf` is written by NetworkManager |
 
 ### 15.2 Phase 2 — physical laptop
@@ -1094,6 +1131,6 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 The installer is accepted when:
 
 - ShellCheck is clean;
-- all tests T-1 … T-21 pass in QEMU;
+- all tests T-1 … T-29 pass in QEMU;
 - all tests L-1 … L-10 that apply to the available hardware pass on the laptop;
 - a developer other than the author can reproduce a bootable system from this document alone without making any design decision that is not written here.

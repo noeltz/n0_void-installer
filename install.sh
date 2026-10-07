@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.9"
+INSTALLER_VERSION="1.3.10"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -26,6 +26,14 @@ INSTALLER_SUDOERS_CREATED=0
 INSTALLER_LOG=""
 INSTALL_STATE=""
 INSTALL_STATE_STEP=0
+INSTALL_STATE_CHECKPOINT="none"
+INSTALL_STATUS="active"
+RESUME_MODE=0
+REPAIR_MODE=0
+ROOT_PARTITION=""
+ESP_PARTITION=""
+REPAIR_ACTION=""
+REPAIR_USER=""
 PROBE_DIR=""
 PROBE_ROOT=""
 PROBE_CONF=""
@@ -44,10 +52,16 @@ usage() {
 void-installer $INSTALLER_VERSION
 
 Usage: install.sh [--config FILE] [--yes] [--help]
+       install.sh --resume ROOT_PARTITION
+       install.sh --repair ROOT_PARTITION [--action check|chroot|password|grub|initramfs] [--user USER]
 
   --config FILE  read settings from FILE (default: ./install.conf if it exists)
   --yes          unattended mode: no dialogs, no confirmation; every value
                  without a default must be present in the config
+  --resume DEV   safely resume an incomplete install on its Btrfs root partition
+  --repair DEV   mount an existing install and run a non-destructive repair action
+  --action NAME  repair action: check, chroot, password, grub, or initramfs
+  --user USER    account to reset with --action password (root is allowed)
   --help         print this help and exit
 EOF
 }
@@ -55,6 +69,11 @@ EOF
 parse_args() {
   CONFIG_FILE=""
   YES_MODE=0
+  RESUME_MODE=0
+  REPAIR_MODE=0
+  ROOT_PARTITION=""
+  REPAIR_ACTION=""
+  REPAIR_USER=""
   while (( $# > 0 )); do
     case $1 in
       --config)
@@ -69,6 +88,22 @@ parse_args() {
         YES_MODE=1
         shift
         ;;
+      --resume|--repair)
+        if [[ -z ${2:-} || -n $ROOT_PARTITION ]]; then usage; exit 2; fi
+        ROOT_PARTITION=$2
+        if [[ $1 == --resume ]]; then RESUME_MODE=1; else REPAIR_MODE=1; fi
+        shift 2
+        ;;
+      --action)
+        [[ -n ${2:-} && -z $REPAIR_ACTION ]] || { usage; exit 2; }
+        REPAIR_ACTION=$2
+        shift 2
+        ;;
+      --user)
+        [[ -n ${2:-} && -z $REPAIR_USER ]] || { usage; exit 2; }
+        REPAIR_USER=$2
+        shift 2
+        ;;
       --help)
         usage
         exit 0
@@ -79,7 +114,17 @@ parse_args() {
         ;;
     esac
   done
-  if [[ -z $CONFIG_FILE && -f ./install.conf ]]; then
+  if (( RESUME_MODE + REPAIR_MODE > 1 )); then usage; exit 2; fi
+  if (( RESUME_MODE == 1 )); then
+    if [[ -n $CONFIG_FILE || $YES_MODE == 1 || -n $REPAIR_ACTION || -n $REPAIR_USER ]]; then usage; exit 2; fi
+  elif (( REPAIR_MODE == 1 )); then
+    if [[ -n $CONFIG_FILE || $YES_MODE == 1 ]]; then usage; exit 2; fi
+    case $REPAIR_ACTION in ""|check|chroot|password|grub|initramfs) ;; *) usage; exit 2 ;; esac
+    if [[ -n $REPAIR_USER && $REPAIR_ACTION != password ]]; then usage; exit 2; fi
+  elif [[ -n $REPAIR_ACTION || -n $REPAIR_USER ]]; then
+    usage; exit 2
+  fi
+  if (( RESUME_MODE == 0 && REPAIR_MODE == 0 )) && [[ -z $CONFIG_FILE && -f ./install.conf ]]; then
     CONFIG_FILE=./install.conf
   fi
 }
@@ -485,13 +530,15 @@ preflight() {
     echo "Required tool not found on the live system: findmnt" >&2
     exit 3
   fi
-  if findmnt -rn -o TARGET | awk '$0 == "/mnt" || index($0, "/mnt/") == 1 { found=1 } END { exit !found }'; then
-    echo "The /mnt tree already contains a mount; unmount it before installing." >&2
-    exit 3
-  fi
-  if [[ -n $(find /mnt -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
-    echo "The /mnt directory is not empty; move its contents before installing." >&2
-    exit 3
+  if (( RESUME_MODE == 0 && REPAIR_MODE == 0 )); then
+    if findmnt -rn -o TARGET | awk '$0 == "/mnt" || index($0, "/mnt/") == 1 { found=1 } END { exit !found }'; then
+      echo "The /mnt tree already contains a mount; unmount it before installing." >&2
+      exit 3
+    fi
+    if [[ -n $(find /mnt -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
+      echo "The /mnt directory is not empty; move its contents before installing." >&2
+      exit 3
+    fi
   fi
   if ! (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
     echo "Bash 4.4 or newer required." >&2
@@ -1185,6 +1232,15 @@ record_owned_mount() {  # $1 = mountpoint already mounted by this installer
   INSTALL_MOUNTS+=("$target|$source|$fstype")
 }
 
+record_owned_mount_tree() {  # $1 = recursive bind root; records nested binds too
+  local root=$1 target source fstype
+  while read -r target source fstype; do
+    [[ $target == "$root" || $target == "$root/"* ]] || continue
+    [[ $target == "$root" ]] && continue
+    INSTALL_MOUNTS+=("$target|$source|$fstype")
+  done < <(findmnt -rn -o TARGET,SOURCE,FSTYPE)
+}
+
 unmount_owned() {
   local entry target expected_source expected_fstype actual_source actual_fstype index
   for (( index=${#INSTALL_MOUNTS[@]} - 1; index >= 0; index-- )); do
@@ -1275,8 +1331,9 @@ write_install_state() {
   [[ -n $INSTALL_STATE ]] || return 0
   tmp=$(mktemp "${INSTALL_STATE}.tmp.XXXXXX")
   {
-    printf 'FORMAT=1\nVERSION=%s\nROOT_UUID=%s\nESP_UUID=%s\nTARGET_DISK=%s\nLAST_COMPLETED_STEP=%s\n' \
-      "$INSTALLER_VERSION" "$ROOT_UUID" "$ESP_UUID" "$TARGET_DISK" "$INSTALL_STATE_STEP"
+    printf 'FORMAT=1\nVERSION=%s\nROOT_UUID=%s\nESP_UUID=%s\nTARGET_DISK=%s\nLAST_COMPLETED_STEP=%s\nLAST_COMPLETED_CHECKPOINT=%s\nINSTALL_STATUS=%s\n' \
+      "$INSTALLER_VERSION" "$ROOT_UUID" "$ESP_UUID" "$TARGET_DISK" "$INSTALL_STATE_STEP" \
+      "${INSTALL_STATE_CHECKPOINT:-none}" "${INSTALL_STATUS:-active}"
     for key in HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_MODE \
                WIFI_SSID WIFI_SECURITY WIFI_HIDDEN \
                CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
@@ -1297,7 +1354,123 @@ initialize_install_state() {
     return 1
   fi
   INSTALL_STATE_STEP=10
+  INSTALL_STATE_CHECKPOINT="filesystems-mounted"
+  INSTALL_STATUS="active"
   write_install_state
+}
+
+read_install_state() {
+  local file=$1 line key val line_number=0
+  local -A seen=()
+  [[ -f $file && ! -L $file && -r $file ]] || { echo "Installer state is missing or unsafe." >&2; return 1; }
+  [[ -d ${file%/*} && ! -L ${file%/*} && $(stat -c %a "${file%/*}") == 700 && $(stat -c %u "${file%/*}") == 0 ]] || {
+    echo "Installer state directory is unsafe." >&2; return 1;
+  }
+  [[ $(stat -c %a "$file") == 600 && $(stat -c %u "$file") == 0 ]] || { echo "Installer state permissions must be root-owned 0600." >&2; return 1; }
+  while IFS= read -r line || [[ -n $line ]]; do
+    line_number=$((line_number + 1))
+    [[ $line =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]] || { echo "Malformed installer state at line $line_number." >&2; return 1; }
+    key=${BASH_REMATCH[1]}; val=${BASH_REMATCH[2]}
+    [[ ! ${seen[$key]+yes} ]] || { echo "Duplicate installer state key $key." >&2; return 1; }
+    seen[$key]=1
+    case $key in
+      FORMAT|VERSION|ROOT_UUID|ESP_UUID|TARGET_DISK|LAST_COMPLETED_STEP|LAST_COMPLETED_CHECKPOINT|INSTALL_STATUS|\
+      HOSTNAME|USERNAME|USER_SHELL|TIMEZONE|LOCALE|KEYMAP|MIRROR|SWAP|CHEZMOI_MODE|\
+      WIFI_SSID|WIFI_SECURITY|WIFI_HIDDEN|CHEZMOI_REPO|EXTRA_PACKAGES|HW_CHASSIS|HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH) ;;
+      *) echo "Unsupported key in installer state: $key." >&2; return 1 ;;
+    esac
+    printf -v "$key" '%s' "$val"
+  done < "$file"
+  for key in FORMAT VERSION ROOT_UUID ESP_UUID TARGET_DISK LAST_COMPLETED_STEP LAST_COMPLETED_CHECKPOINT INSTALL_STATUS \
+              HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_MODE WIFI_SSID WIFI_SECURITY \
+              WIFI_HIDDEN CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
+    [[ ${seen[$key]+yes} ]] || { echo "Installer state is missing required key $key." >&2; return 1; }
+  done
+  [[ $FORMAT == 1 && $VERSION == "$INSTALLER_VERSION" ]] || { echo "Installer state format/version does not match this installer." >&2; return 1; }
+  [[ $LAST_COMPLETED_STEP =~ ^[0-9]+$ ]] && (( LAST_COMPLETED_STEP >= 10 && LAST_COMPLETED_STEP <= 22 )) || {
+    echo "Installer state checkpoint is invalid or already complete." >&2; return 1;
+  }
+  [[ $INSTALL_STATUS == active ]] || { echo "Installer state is not marked active." >&2; return 1; }
+  case "$LAST_COMPLETED_STEP:$LAST_COMPLETED_CHECKPOINT" in
+    10:filesystems-mounted|11:bootstrap-prepared|12:packages-installed|13:system-configured|14:snapper-configured|15:bootloader-configured|16:services-enabled|17:accounts-configured|18:chezmoi-hook-configured|19:chezmoi-applied|20:wrappers-installed|21:initial-snapshot|22:validated) ;;
+    *) echo "Installer checkpoint number and name do not match." >&2; return 1 ;;
+  esac
+  [[ $ROOT_UUID =~ ^[[:alnum:]-]+$ && $ESP_UUID =~ ^[[:alnum:]-]+$ ]] || { echo "Invalid device UUID in installer state." >&2; return 1; }
+  [[ $TARGET_DISK == /dev/* && $TARGET_DISK != *[[:space:]]* ]] || { echo "Invalid target disk in installer state." >&2; return 1; }
+  INSTALL_STATE_STEP=$LAST_COMPLETED_STEP
+  INSTALL_STATE_CHECKPOINT=$LAST_COMPLETED_CHECKPOINT
+}
+
+identify_existing_devices() {
+  local requested root_type parent part type uuid
+  requested=$(readlink -f -- "$ROOT_PARTITION") || { echo "Cannot resolve root partition $ROOT_PARTITION." >&2; return 1; }
+  [[ -b $requested ]] || { echo "Root partition must be a block device." >&2; return 1; }
+  root_type=$(lsblk -dnro TYPE "$requested")
+  [[ $root_type == part && $(blkid -s TYPE -o value "$requested") == btrfs ]] || {
+    echo "Root device must be a Btrfs partition." >&2; return 1;
+  }
+  parent=$(lsblk -dnro PKNAME "$requested")
+  [[ -n $parent ]] || { echo "Could not identify the whole disk containing $requested." >&2; return 1; }
+  TARGET_DISK=$(readlink -f "/dev/$parent")
+  [[ -b $TARGET_DISK && $(lsblk -dnro TYPE "$TARGET_DISK") == disk ]] || { echo "Invalid parent disk for $requested." >&2; return 1; }
+  if lsblk -nrpo MOUNTPOINT "$TARGET_DISK" | grep -q '[^[:space:]]'; then
+    echo "A partition on $TARGET_DISK is already mounted; unmount it before resume or repair." >&2
+    return 1
+  fi
+  if lsblk -nrpo NAME,HOLDERS "$TARGET_DISK" | awk 'NF > 1 && $2 != "" { found=1 } END { exit !found }'; then
+    echo "A partition on $TARGET_DISK has active block-device holders." >&2
+    return 1
+  fi
+  ROOT_PARTITION=$requested
+  ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PARTITION")
+  ESP_PARTITION=""
+  while read -r part type; do
+    [[ ${type,,} == c12a7328-f81f-11d2-ba4b-00a0c93ec93b ]] || continue
+    uuid=$(blkid -s UUID -o value "$part" 2>/dev/null || true)
+    if [[ -n ${ESP_UUID:-} && $uuid == "$ESP_UUID" ]] || [[ -z ${ESP_UUID:-} ]]; then
+      ESP_PARTITION=$part; ESP_UUID=$uuid; break
+    fi
+  done < <(lsblk -nrpo NAME,PARTTYPE "$TARGET_DISK")
+  [[ -n $ESP_PARTITION && -n $ESP_UUID ]] || { echo "Could not identify the expected EFI partition on $TARGET_DISK." >&2; return 1; }
+  if [[ -n ${EXPECTED_ROOT_UUID:-} && $ROOT_UUID != "$EXPECTED_ROOT_UUID" ]]; then
+    echo "Root partition UUID does not match the saved installer state." >&2; return 1
+  fi
+  if [[ -n ${EXPECTED_ESP_UUID:-} && $ESP_UUID != "$EXPECTED_ESP_UUID" ]]; then
+    echo "EFI partition UUID does not match the saved installer state." >&2; return 1
+  fi
+  if [[ -n ${EXPECTED_TARGET_DISK:-} && $TARGET_DISK != "$EXPECTED_TARGET_DISK" ]]; then
+    echo "Parent disk does not match the saved installer state." >&2; return 1
+  fi
+}
+
+mount_existing_layout() {
+  local sv
+  if findmnt -rn -o TARGET | awk '$0 == "/mnt" { found=1 } END { exit !found }'; then
+    local owned=0 entry
+    for entry in "${INSTALL_MOUNTS[@]}"; do [[ $entry == /mnt\|* ]] && owned=1; done
+    if (( owned == 0 )); then echo "The /mnt tree is already mounted by another process." >&2; return 1; fi
+  else
+    if findmnt -rn -o TARGET | awk 'index($0, "/mnt/") == 1 { found=1 } END { exit !found }' \
+        || [[ -n $(find /mnt -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
+      echo "The /mnt tree must be empty and unmounted before resume or repair." >&2
+      return 1
+    fi
+    mount_owned /mnt -o "$BTRFS_OPTS,subvol=@" "$ROOT_PARTITION" /mnt
+  fi
+  mkdir -p /mnt/{home,.snapshots,var/log,var/cache/xbps,var/tmp,boot/efi}
+  for sv in @home @snapshots @var_log @var_cache_xbps @var_tmp; do
+    if [[ $sv == @snapshots ]] && (( RESUME_MODE == 1 && INSTALL_STATE_STEP < 14 )); then
+      continue
+    fi
+    case $sv in
+      @home) mount_owned /mnt/home -o "$BTRFS_OPTS,subvol=$sv" "$ROOT_PARTITION" /mnt/home ;;
+      @snapshots) mount_owned /mnt/.snapshots -o "$BTRFS_OPTS,subvol=$sv" "$ROOT_PARTITION" /mnt/.snapshots ;;
+      @var_log) mount_owned /mnt/var/log -o "$BTRFS_OPTS,subvol=$sv" "$ROOT_PARTITION" /mnt/var/log ;;
+      @var_cache_xbps) mount_owned /mnt/var/cache/xbps -o "$BTRFS_OPTS,subvol=$sv" "$ROOT_PARTITION" /mnt/var/cache/xbps ;;
+      @var_tmp) mount_owned /mnt/var/tmp -o "$BTRFS_OPTS,subvol=$sv" "$ROOT_PARTITION" /mnt/var/tmp ;;
+    esac
+  done
+  mount_owned /mnt/boot/efi -o umask=0077 "$ESP_PARTITION" /mnt/boot/efi
 }
 
 preserve_install_log() {
@@ -1322,7 +1495,6 @@ preserve_install_log() {
 # --------------------------------------------------------------------------
 
 bootstrap_system() {
-  local d
   case $1 in
     prepare)
       mkdir -p /mnt/var/db/xbps/keys
@@ -1362,13 +1534,21 @@ bootstrap_system() {
         cp /mnt/usr/share/xbps.d/*-repository-*.conf /mnt/etc/xbps.d/
         sed -i "s|https://repo-default.voidlinux.org|$MIRROR|g" /mnt/etc/xbps.d/*-repository-*.conf
       fi
-      for d in dev proc sys; do
-        mount_owned "/mnt/$d" --rbind "/$d" "/mnt/$d"
-        mount --make-rslave "/mnt/$d"
-      done
+      mount_target_bindings
       cp /etc/resolv.conf /mnt/etc/resolv.conf
       ;;
   esac
+}
+
+mount_target_bindings() {
+  local d
+  for d in dev proc sys; do
+    if ! findmnt -rn -o TARGET | awk -v target="/mnt/$d" '$0 == target { found=1 } END { exit !found }'; then
+      mount_owned "/mnt/$d" --rbind "/$d" "/mnt/$d"
+      record_owned_mount_tree "/mnt/$d"
+      mount --make-rslave "/mnt/$d"
+    fi
+  done
 }
 
 # --------------------------------------------------------------------------
@@ -1492,7 +1672,8 @@ NM_EOF
 # --------------------------------------------------------------------------
 
 setup_snapper() {
-  chroot /mnt /bin/bash -s <<'CHROOT_EOF'
+  if [[ ! -f /mnt/etc/snapper/configs/root ]]; then
+    chroot /mnt /bin/bash -s <<'CHROOT_EOF'
 set -eu
 # /.snapshots exists as an empty directory (created by mount_layout); snapper
 # needs the path absent to create its nested subvolume, which is replaced
@@ -1502,7 +1683,10 @@ snapper --no-dbus -c root create-config /
 btrfs subvolume delete /.snapshots
 mkdir /.snapshots
 CHROOT_EOF
-  mount_owned /mnt/.snapshots -o "$BTRFS_OPTS,subvol=@snapshots" "$(part 2)" /mnt/.snapshots
+  fi
+  if ! findmnt -rn -o TARGET | awk '$0 == "/mnt/.snapshots" { found=1 } END { exit !found }'; then
+    mount_owned /mnt/.snapshots -o "$BTRFS_OPTS,subvol=@snapshots" "${ROOT_PARTITION:-$(part 2)}" /mnt/.snapshots
+  fi
   chroot /mnt /bin/bash -s <<'CHROOT_EOF'
 set -eu
 chmod 750 /.snapshots
@@ -1583,23 +1767,33 @@ EOF
 
 create_user() {
   local account_status status_name status_code _status_details
-  chroot /mnt useradd -m -s "$USER_SHELL" -G wheel,audio,video,input "$USERNAME"
+  if ! chroot /mnt id -u "$USERNAME" >/dev/null 2>&1; then
+    chroot /mnt useradd -m -s "$USER_SHELL" -G wheel,audio,video,input "$USERNAME"
+  fi
   # Passwords are passed on stdin only: never on disk outside /etc/shadow,
   # never in the process list, never in the chroot environment.
-  if [[ -v USER_PASSWORD_HASH ]]; then
-    printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD_HASH" | chroot /mnt chpasswd -e
-  else
+  account_status=$(LC_ALL=C chroot /mnt passwd -S "$USERNAME")
+  read -r status_name status_code _status_details <<< "$account_status"
+  if [[ $status_code != P ]]; then
+    if [[ -v USER_PASSWORD_HASH ]]; then
+      printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD_HASH" | chroot /mnt chpasswd -e
+    else
     # An explicit crypt method bypasses PAM: Void's shipped chpasswd PAM
     # password stack can permit the operation without updating the hash.
-    printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd -c SHA512
+      printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd -c SHA512
+    fi
   fi
 
   # Set an independent root password; root remains available at the console
   # as a recovery account if the regular user cannot authenticate.
-  if [[ -v ROOT_PASSWORD_HASH ]]; then
-    printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chroot /mnt chpasswd -e
-  else
-    printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd -c SHA512
+  account_status=$(LC_ALL=C chroot /mnt passwd -S root)
+  read -r status_name status_code _status_details <<< "$account_status"
+  if [[ $status_code != P ]]; then
+    if [[ -v ROOT_PASSWORD_HASH ]]; then
+      printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chroot /mnt chpasswd -e
+    else
+      printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd -c SHA512
+    fi
   fi
 
   # Catch incomplete account setup before reporting a successful install.
@@ -1819,7 +2013,9 @@ WRAPPER_EOF
 }
 
 initial_snapshot() {
-  chroot /mnt snapper --no-dbus -c root create -c number -d "Initial installation"
+  if ! chroot /mnt snapper --no-dbus -c root list | grep -Fq "Initial installation"; then
+    chroot /mnt snapper --no-dbus -c root create -c number -d "Initial installation"
+  fi
   chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 }
 
@@ -1834,7 +2030,9 @@ finalize() {
   fi
   rm -f /mnt/etc/resolv.conf                # NetworkManager manages it at boot
   if [[ -n $INSTALL_STATE ]]; then
-    INSTALL_STATE_STEP=17
+    INSTALL_STATE_STEP=23
+    INSTALL_STATE_CHECKPOINT="complete"
+    INSTALL_STATUS="complete"
     write_install_state
   fi
   preserve_install_log
@@ -1875,17 +2073,20 @@ on_error() {
 # Step orchestration (spec section 10)
 # --------------------------------------------------------------------------
 
-run_step() {  # $1 = N, $2 = name, rest = function
+run_step() {  # $1 = N, $2 = name, $3 = checkpoint, rest = function
   CURRENT_STEP_N=$1
   CURRENT_STEP_NAME=$2
-  printf '==> [%s/17] %s\n' "$1" "$2" | tee -a "$INSTALLER_LOG"
-  shift 2
+  printf '==> [%s/23] %s\n' "$1" "$2" | tee -a "$INSTALLER_LOG"
+  local checkpoint=$3
+  shift 3
   case $CURRENT_STEP_N in
-    5|8|14) "$@" ;;  # keep dialogs and arbitrary dotfile output outside the log
+    5|8|19) "$@" ;;  # keep dialogs and arbitrary dotfile output outside the log
     *) "$@" > >(tee -a "$INSTALLER_LOG") 2> >(tee -a "$INSTALLER_LOG" >&2) ;;
   esac
   if [[ -n $INSTALL_STATE && -f $INSTALL_STATE && $INSTALL_STATE_STEP -lt $CURRENT_STEP_N ]]; then
     INSTALL_STATE_STEP=$CURRENT_STEP_N
+    INSTALL_STATE_CHECKPOINT=$checkpoint
+    INSTALL_STATUS=active
     write_install_state
   fi
 }
@@ -1895,6 +2096,7 @@ load_settings() {
     load_config "$CONFIG_FILE"
   fi
   apply_defaults
+  unset USER_PASSWORD USER_PASSWORD_HASH ROOT_PASSWORD ROOT_PASSWORD_HASH WIFI_PASSWORD
 }
 
 step_interactive() {
@@ -1906,6 +2108,155 @@ step_filesystems() {
   format_disk
   mount_layout
   initialize_install_state
+}
+
+step_repair_partial_packages() {
+  local rc=0
+  chroot /mnt xbps-pkgdb -a || rc=$?
+  if (( rc != 0 )); then
+    echo "Target package database needs repair; reconfiguring installed packages before retry." >&2
+    chroot /mnt xbps-reconfigure -a || true
+    chroot /mnt xbps-pkgdb -a || {
+      echo "Package database audit still fails. Use --repair ROOT_PARTITION --action chroot and inspect with xbps-pkgdb -a before resuming." >&2
+      return 1
+    }
+  fi
+}
+
+resume_secrets() {
+  local status
+  if (( INSTALL_STATE_STEP < 13 )) && [[ -n $WIFI_SSID && $WIFI_SECURITY == wpa-psk && ! -v WIFI_PASSWORD ]]; then
+    prompt_wifi_password
+  fi
+  if (( INSTALL_STATE_STEP < 17 )); then
+    status=$(LC_ALL=C chroot /mnt passwd -S "$USERNAME" 2>/dev/null || true)
+    if [[ ${status#* } != P* ]] && [[ ! -v USER_PASSWORD && ! -v USER_PASSWORD_HASH ]]; then
+      prompt_password
+    fi
+    status=$(LC_ALL=C chroot /mnt passwd -S root 2>/dev/null || true)
+    if [[ ${status#* } != P* ]] && [[ ! -v ROOT_PASSWORD && ! -v ROOT_PASSWORD_HASH ]]; then
+      prompt_root_password
+    fi
+  fi
+}
+
+load_resume_state() {
+  local actual_root actual_esp actual_disk
+  identify_existing_devices
+  if findmnt -rn -o TARGET | awk '$0 == "/mnt" || index($0, "/mnt/") == 1 { found=1 } END { exit !found }' \
+      || [[ -n $(find /mnt -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
+    echo "The /mnt tree must be empty and unmounted before resume." >&2; return 1
+  fi
+  actual_root=$ROOT_UUID; actual_esp=$ESP_UUID; actual_disk=$TARGET_DISK
+  mount_owned /mnt -o "$BTRFS_OPTS,subvol=@" "$ROOT_PARTITION" /mnt
+  INSTALL_STATE=/mnt/var/lib/void-installer/state
+  read_install_state "$INSTALL_STATE"
+  if [[ $ROOT_UUID != "$actual_root" || $ESP_UUID != "$actual_esp" || $TARGET_DISK != "$actual_disk" ]]; then
+    echo "Installer state device identities do not match the selected root partition." >&2
+    return 1
+  fi
+  apply_defaults
+  [[ $CHEZMOI_MODE != install || $INSTALL_STATE_STEP != 18 ]] || {
+    echo "Install-time chezmoi was interrupted after checkpoint 18; it can run arbitrary dotfile scripts. Resume is stopped. Use --repair ROOT_PARTITION --action chroot, then inspect and repair manually." >&2
+    return 1
+  }
+  local key
+  for key in HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_MODE WIFI_SECURITY WIFI_HIDDEN CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
+    if ! validate_one "$key" "${!key-}"; then
+      echo "Saved installer state has invalid $key: $VALIDATE_REASON" >&2
+      return 1
+    fi
+  done
+  if [[ -n $WIFI_SSID ]] && ! validate_one WIFI_SSID "$WIFI_SSID"; then
+    echo "Saved installer state has invalid WIFI_SSID: $VALIDATE_REASON" >&2
+    return 1
+  fi
+  mount_existing_layout
+  mount_target_bindings
+  cp /etc/resolv.conf /mnt/etc/resolv.conf
+  resume_secrets
+}
+
+repair_menu() {
+  local choice
+  if [[ -n $REPAIR_ACTION ]]; then return 0; fi
+  if command -v dialog >/dev/null 2>&1; then
+    REPAIR_ACTION=$(dialog --clear --title "Void installer repair" --menu "Choose an action" 15 72 6 \
+      check "Check installation" chroot "Open target shell" password "Set account password" \
+      grub "Reinstall GRUB" initramfs "Regenerate initramfs" 3>&1 1>&2 2>&3) || return 4
+  else
+    printf 'Repair action: 1 check, 2 chroot, 3 password, 4 grub, 5 initramfs: '
+    read -r choice
+    case $choice in 1) REPAIR_ACTION=check ;; 2) REPAIR_ACTION=chroot ;; 3) REPAIR_ACTION=password ;; 4) REPAIR_ACTION=grub ;; 5) REPAIR_ACTION=initramfs ;; *) return 4 ;; esac
+  fi
+}
+
+repair_password() {
+  local username=$REPAIR_USER
+  if [[ -z $username ]]; then
+    if command -v dialog >/dev/null 2>&1; then
+      username=$(dialog --clear --title "Account password" --inputbox "Account name (root is allowed)" 10 70 3>&1 1>&2 2>&3) || return 4
+    else
+      read -r -p "Account name (root is allowed): " username
+    fi
+  fi
+  [[ $username == root || $username =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "Invalid account name." >&2; return 2; }
+  chroot /mnt id -u "$username" >/dev/null || { echo "Account does not exist: $username" >&2; return 1; }
+  chroot /mnt passwd "$username"
+}
+
+run_repair_action() {
+  local kernel version
+  repair_menu
+  case $REPAIR_ACTION in
+    check) validate_target_installation ;;
+    chroot) chroot /mnt /bin/bash -l ;;
+    password) repair_password ;;
+    grub) setup_grub; validate_target_installation ;;
+    initramfs)
+      compgen -G '/mnt/usr/lib/modules/*' >/dev/null || { echo "No installed kernel modules found." >&2; return 1; }
+      for kernel in /mnt/usr/lib/modules/*; do
+        [[ -d $kernel ]] || continue
+        version=${kernel##*/}
+        chroot /mnt dracut --force "/boot/initramfs-$version.img" "$version"
+      done
+      validate_target_installation
+      ;;
+  esac
+}
+
+run_resume() {
+  apply_defaults
+  preflight
+  load_resume_state
+  detect_hardware
+  build_package_lists
+  probe_packages
+  if (( INSTALL_STATE_STEP == 11 )); then step_repair_partial_packages; fi
+  (( INSTALL_STATE_STEP < 11 )) && run_step 11 "Prepare target for bootstrap" bootstrap-prepared bootstrap_prepare
+  (( INSTALL_STATE_STEP < 12 )) && run_step 12 "Install packages" packages-installed bootstrap_install
+  (( INSTALL_STATE_STEP < 13 )) && run_step 13 "Configure base system" system-configured configure_system
+  (( INSTALL_STATE_STEP < 14 )) && run_step 14 "Configure Snapper" snapper-configured setup_snapper
+  (( INSTALL_STATE_STEP < 15 )) && run_step 15 "Install GRUB" bootloader-configured setup_grub
+  (( INSTALL_STATE_STEP < 16 )) && run_step 16 "Enable services" services-enabled enable_services
+  (( INSTALL_STATE_STEP < 17 )) && run_step 17 "Configure accounts" accounts-configured create_user
+  (( INSTALL_STATE_STEP < 18 )) && run_step 18 "Configure first-login dotfiles" chezmoi-hook-configured configure_chezmoi_first_login
+  (( INSTALL_STATE_STEP < 19 )) && run_step 19 "Apply chezmoi dotfiles" chezmoi-applied apply_chezmoi
+  (( INSTALL_STATE_STEP < 20 )) && run_step 20 "Install xbps wrappers" wrappers-installed install_wrappers
+  (( INSTALL_STATE_STEP < 21 )) && run_step 21 "Create initial snapshot" initial-snapshot initial_snapshot
+  (( INSTALL_STATE_STEP < 22 )) && run_step 22 "Validate installed system" validated validate_target_installation
+  run_step 23 "Finalize" complete finalize
+}
+
+run_repair() {
+  [[ $EUID -eq 0 ]] || { echo "Repair mode must be run as root." >&2; return 1; }
+  [[ -d /sys/firmware/efi ]] || { echo "Repair mode requires UEFI boot." >&2; return 1; }
+  identify_existing_devices
+  mount_existing_layout
+  mount_target_bindings
+  ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PARTITION")
+  SV_FATAL=(dbus elogind polkitd NetworkManager chronyd acpid grub-btrfs)
+  run_repair_action
 }
 
 validate_target_installation() {
@@ -1971,20 +2322,6 @@ validate_target_installation() {
 bootstrap_prepare() { bootstrap_system prepare; }
 bootstrap_install()  { bootstrap_system install; }
 
-step_configure() {
-  configure_system
-  setup_snapper
-  setup_grub
-  enable_services
-  create_user
-  configure_chezmoi_first_login /mnt
-}
-
-step_wrappers() {
-  install_wrappers
-  initial_snapshot
-}
-
 main() {
   trap cleanup EXIT
   trap 'on_error $LINENO' ERR
@@ -1996,23 +2333,38 @@ main() {
   printf 'void-installer %s\n' "$INSTALLER_VERSION" > "$INSTALLER_LOG"
   printf 'Installer output log: %s\n' "$INSTALLER_LOG" | tee -a "$INSTALLER_LOG"
 
-  run_step  1 "Parse arguments and load configuration" load_settings
-  run_step  2 "Preflight checks" preflight
-  run_step  3 "Detect hardware" detect_hardware
-  run_step  4 "Build package lists" build_package_lists
-  run_step  5 "Select disk and prompt for missing values" step_interactive
-  run_step  6 "Validate configuration" validate_all
-  run_step  7 "Probe packages and services" probe_packages
-  run_step  8 "Confirm installation" confirm
-  run_step  9 "Partition disk" partition_disk
-  run_step 10 "Create filesystems and mount" step_filesystems
-  run_step 11 "Prepare target for bootstrap" bootstrap_prepare
-  run_step 12 "Install packages" bootstrap_install
-  run_step 13 "Configure system" step_configure
-  run_step 14 "Apply chezmoi dotfiles" apply_chezmoi
-  run_step 15 "Install xbps wrappers and initial snapshot" step_wrappers
-  run_step 16 "Validate installed system" validate_target_installation
-  run_step 17 "Finalize" finalize
+  if (( RESUME_MODE == 1 )); then
+    run_resume
+    return
+  elif (( REPAIR_MODE == 1 )); then
+    run_repair
+    echo "Repair action '$REPAIR_ACTION' finished."
+    return
+  fi
+
+  run_step  1 "Parse arguments and load configuration" settings-loaded load_settings
+  run_step  2 "Preflight checks" preflight-passed preflight
+  run_step  3 "Detect hardware" hardware-detected detect_hardware
+  run_step  4 "Build package lists" packages-planned build_package_lists
+  run_step  5 "Select disk and prompt for missing values" values-selected step_interactive
+  run_step  6 "Validate configuration" configuration-validated validate_all
+  run_step  7 "Probe packages and services" packages-probed probe_packages
+  run_step  8 "Confirm installation" installation-confirmed confirm
+  run_step  9 "Partition disk" disk-partitioned partition_disk
+  run_step 10 "Create filesystems and mount" filesystems-mounted step_filesystems
+  run_step 11 "Prepare target for bootstrap" bootstrap-prepared bootstrap_prepare
+  run_step 12 "Install packages" packages-installed bootstrap_install
+  run_step 13 "Configure base system" system-configured configure_system
+  run_step 14 "Configure Snapper" snapper-configured setup_snapper
+  run_step 15 "Install GRUB" bootloader-configured setup_grub
+  run_step 16 "Enable services" services-enabled enable_services
+  run_step 17 "Configure accounts" accounts-configured create_user
+  run_step 18 "Configure first-login dotfiles" chezmoi-hook-configured configure_chezmoi_first_login
+  run_step 19 "Apply chezmoi dotfiles" chezmoi-applied apply_chezmoi
+  run_step 20 "Install xbps wrappers" wrappers-installed install_wrappers
+  run_step 21 "Create initial snapshot" initial-snapshot initial_snapshot
+  run_step 22 "Validate installed system" validated validate_target_installation
+  run_step 23 "Finalize" complete finalize
 }
 
 main "$@"

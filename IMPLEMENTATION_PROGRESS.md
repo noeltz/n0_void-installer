@@ -12,8 +12,8 @@ continue from the last completed checkpoint.
 | 3. EFI fallback boot | 1.3.6 | Complete; pushed | Commit `fefce60`; local Secure Boot and GRUB invocation regressions pass. OVMF boot remains a VM acceptance check. |
 | 4. Cached repository probes | 1.3.7 | Complete; pushed | Commit `e20ab3a`; signed local XBPS fixture confirms package/service outcomes and no repeat index downloads. |
 | 5. First-login chezmoi | 1.3.8 | Complete; pushed | Commit `74ee39c`; helper regression covers hook idempotence, tty/user gating, retries, locking, and no passwordless sudo. |
-| 6. Target Wi-Fi profile | 1.3.9 | Verified locally; awaiting commit/push | Offline nmcli parses generated profiles; Wi-Fi and state regressions verify escaping, permissions, bounds, and secret exclusion. |
-| 7. Resume and repair modes | 1.3.10 | Pending | Inject checkpoint failures and prove resume/repair cannot format or partition. |
+| 6. Target Wi-Fi profile | 1.3.9 | Complete; pushed | Commit `a0bfeef`; offline nmcli parses generated profiles; Wi-Fi and state regressions verify escaping, permissions, bounds, and secret exclusion. |
+| 7. Resume and repair modes | 1.3.10 | Verified locally; awaiting commit/push | State rejection, checkpoint dispatch, and no-format/no-partition regressions pass. |
 
 ## Session notes
 
@@ -82,4 +82,14 @@ continue from the last completed checkpoint.
   test fixture used an unquoted SSID with a space and failed; quoting the
   fixture corrected it. No product-code failure remains. ShellCheck is
   unavailable locally.
-- Current next action: commit/push release 1.3.9, then implement resume/repair.
+- Increment 7 changes: added validated `--resume` and non-destructive `--repair`
+  flows, atomic active/completed checkpoint metadata, idempotent retry behavior,
+  package database audit/reconfiguration, secret re-prompts, and a 23-step
+  install sequence. Repair offers check, chroot, password, GRUB, and initramfs.
+- Increment 7 verification: syntax, bootstrap, account-password (in a user
+  namespace), boot, chezmoi, cleanup, state, Wi-Fi, resume/repair, and diff
+  checks pass. The first account regression invocation lacked root privileges;
+  rerunning through the approved user namespace passed. Initial resume-test
+  fixture omissions were corrected; no product-code failure remains.
+- Current next action: finish final review, commit/push release 1.3.10, and
+  record the remote commit.

@@ -64,6 +64,25 @@ ${EDITOR:-vi} install.conf
 sudo bash install.sh --yes --config install.conf
 ```
 
+If an installation stops after formatting the target, boot the live ISO again
+and resume from its Btrfs root partition (for example `/dev/sda2`). Resume
+checks the saved installer version and the root/EFI UUIDs before continuing:
+
+```sh
+bash install.sh --resume /dev/sda2
+```
+
+To inspect or repair an existing installation without formatting it, use:
+
+```sh
+bash install.sh --repair /dev/sda2
+```
+
+Repair mode offers a system check, target chroot, account password reset, GRUB
+reinstall, or initramfs regeneration. Actions can also be selected directly,
+such as `--repair /dev/sda2 --action password --user root`. Resume and repair
+require the target disk to be unmounted and `/mnt` to be empty.
+
 All settings, defaults and validation rules are documented in
 `install.conf.example`.
 

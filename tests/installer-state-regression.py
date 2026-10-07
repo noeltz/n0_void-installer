@@ -37,6 +37,8 @@ ROOT_UUID=root-fixture
 ESP_UUID=esp-fixture
 TARGET_DISK=/dev/vda
 INSTALL_STATE_STEP=10
+INSTALL_STATE_CHECKPOINT=filesystems-mounted
+INSTALL_STATUS=active
 HOSTNAME=void
 USERNAME=fixture
 USER_SHELL=/bin/bash
@@ -71,10 +73,10 @@ ROOT_PASSWORD_HASH='$6$root-hash-secret'
 
     log = root / "install.log"
     step_harness = (
-        "#!/bin/bash\nset -eu\nINSTALLER_LOG=$1\nCURRENT_STEP_N=14\n"
+        "#!/bin/bash\nset -eu\nINSTALLER_LOG=$1\nCURRENT_STEP_N=19\n"
         "INSTALL_STATE=\nINSTALL_STATE_STEP=0\n"
         + run_step
-        + "run_step 14 'Apply chezmoi dotfiles' printf '%s\\n' dotfile-output-secret\n"
+        + "run_step 19 'Apply chezmoi dotfiles' chezmoi-applied printf '%s\\n' dotfile-output-secret\n"
     )
     subprocess.run(["bash", "-c", step_harness, "test", str(log)], check=True,
                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
