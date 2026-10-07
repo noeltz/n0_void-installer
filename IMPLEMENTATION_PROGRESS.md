@@ -31,7 +31,8 @@ from KEYMAP without a separate setting; open first-login setup in kitty.
 - Remote CI failed at ShellCheck: Ubuntu uses 0.9.0, which flags omitted optional arguments and the helper status-read shorthand. Explicit production paths and conditional reads fix the warnings without changing behavior. The first compatibility patch fixed installer lint; testing the extracted scripts then exposed the status-read warning, now fixed.
 - Both ShellCheck 0.9.0 and 0.11.0 pass for the installer and all three embedded scripts. Affected boot/desktop/greetd/resume/chezmoi/graphical regressions pass.
 - The next remote CI run passed all lint and exposed a fixture portability issue: its optional host-registry check used Ubuntu XKB, which lacks Void’s ABNT2 model. That additional host check now runs only on Void; deterministic target fixtures still run everywhere, and the actual target registry check remains mandatory during installation. Local desktop regression passes. All representative conversions were additionally verified against the actual `xkeyboard-config-2.48_1` archive from the configured Void mirror, including ABNT2.
-- Current next action: push the portable fixture fix, verify remote CI, then fresh VM acceptance T-30–T-33.
+- Final CI compatibility commits `8f1f95a`, `614b482` and `f092213` are pushed. [GitHub CI for `f092213`](https://github.com/noeltz/n0_void-installer/actions/runs/37609687833) passed installer lint, all generated-helper lint and the six portable regression scripts. All eleven local regression scripts passed.
+- Current next action: fresh VM acceptance T-30–T-33. Implementation and automated verification are complete; no unresolved failure remains.
 - VM acceptance: T-30–T-33 pending; this workspace has no VM runner. Use a fresh install for desktop/greetd/first-login acceptance. Resume still requires the exact initiating version.
 
 Implementation is split into seven independently reviewed releases. A later
