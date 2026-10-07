@@ -13,7 +13,7 @@ continue from the last completed checkpoint.
 | 4. Cached repository probes | 1.3.7 | Complete; pushed | Commit `e20ab3a`; signed local XBPS fixture confirms package/service outcomes and no repeat index downloads. |
 | 5. First-login chezmoi | 1.3.8 | Complete; pushed | Commit `74ee39c`; helper regression covers hook idempotence, tty/user gating, retries, locking, and no passwordless sudo. |
 | 6. Target Wi-Fi profile | 1.3.9 | Complete; pushed | Commit `a0bfeef`; offline nmcli parses generated profiles; Wi-Fi and state regressions verify escaping, permissions, bounds, and secret exclusion. |
-| 7. Resume and repair modes | 1.3.10 | Verified locally; awaiting commit/push | State rejection, checkpoint dispatch, and no-format/no-partition regressions pass. |
+| 7. Resume and repair modes | 1.3.10 | Complete; pushed | Commit `c909a4a`; state rejection, checkpoint dispatch, and no-format/no-partition regressions pass. |
 
 ## Session notes
 
@@ -91,5 +91,5 @@ continue from the last completed checkpoint.
   checks pass. The first account regression invocation lacked root privileges;
   rerunning through the approved user namespace passed. Initial resume-test
   fixture omissions were corrected; no product-code failure remains.
-- Current next action: finish final review, commit/push release 1.3.10, and
-  record the remote commit.
+- Commit `c909a4a` pushed to `origin/main` as release 1.3.10. QEMU acceptance
+  tests T-27 and T-29 remain documented for real-VM validation.
