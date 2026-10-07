@@ -66,10 +66,16 @@ ROOT_PASSWORD=change-this-root-password
 # Default: zram. No swap partition or swap file either way.
 #SWAP=zram
 
-# chezmoi dotfiles repository, applied as the new user during installation.
+# chezmoi dotfiles repository, applied as the new user at first login.
 # https://... URL or GitHub user/repo (public repositories only), or empty to
 # skip dotfiles entirely. Default: empty
 #CHEZMOI_REPO=alice/dotfiles
+
+# Dotfiles setup: first-login (default) runs once in the user's first
+# interactive tty login with normal sudo prompts; install runs it in the
+# installation chroot using a temporary passwordless sudo rule.
+# This setting is ignored when CHEZMOI_REPO is empty.
+#CHEZMOI_MODE=first-login
 
 # Extra packages to install (space-separated). Each name is verified against
 # the mirror before anything is written to disk. Default: empty

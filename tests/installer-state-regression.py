@@ -45,6 +45,7 @@ LOCALE=en_US.UTF-8
 KEYMAP=us
 MIRROR=https://repo-default.voidlinux.org
 SWAP=zram
+CHEZMOI_MODE=first-login
 CHEZMOI_REPO=example/dotfiles
 EXTRA_PACKAGES=
 HW_CHASSIS=auto

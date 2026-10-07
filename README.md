@@ -73,6 +73,11 @@ Remove the installation medium and reboot. Log in with the configured user and
 password. That user can use `sudo`; root can also log in on the console with
 the separate root password configured during installation.
 
+When a chezmoi repository is configured, setup runs on the user's first
+interactive tty login by default. If it fails or is interrupted, retry with
+`void-installer-chezmoi --retry`. Set `CHEZMOI_MODE=install` in the installer
+configuration to use installation-time setup instead.
+
 ### Recovery if a password is lost
 
 If the user's password is lost, log in as root on tty1 and run `passwd youruser`.
@@ -118,4 +123,5 @@ Cleanup and state regression tests run without a Void installation or root:
 python3 tests/cleanup-regression.py
 python3 tests/installer-state-regression.py
 python3 tests/boot-regression.py
+python3 tests/chezmoi-regression.py
 ```

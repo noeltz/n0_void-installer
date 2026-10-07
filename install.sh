@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.7"
+INSTALLER_VERSION="1.3.8"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -108,7 +108,7 @@ load_config() {
       TARGET_DISK|HOSTNAME|USERNAME|USER_PASSWORD|USER_PASSWORD_HASH|\
       ROOT_PASSWORD|ROOT_PASSWORD_HASH|USER_SHELL|\
       TIMEZONE|LOCALE|KEYMAP|MIRROR|SWAP|CHEZMOI_REPO|EXTRA_PACKAGES|HW_CHASSIS|\
-      HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH)
+      CHEZMOI_MODE|HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH)
         ;;
       *)
         echo "Unsupported config key $key in $file at line $line_number." >&2
@@ -134,6 +134,7 @@ apply_defaults() {
   [[ -v MIRROR ]] || MIRROR=https://repo-default.voidlinux.org
   [[ -v SWAP ]] || SWAP=zram
   [[ -v CHEZMOI_REPO ]] || CHEZMOI_REPO=""
+  [[ -v CHEZMOI_MODE ]] || CHEZMOI_MODE=first-login
   [[ -v EXTRA_PACKAGES ]] || EXTRA_PACKAGES=""
   [[ -v HW_CHASSIS ]] || HW_CHASSIS=auto
   [[ -v HW_TOUCH ]] || HW_TOUCH=auto
@@ -246,6 +247,12 @@ validate_one() {
         fi
       fi
       ;;
+    CHEZMOI_MODE)
+      if [[ $val != first-login && $val != install ]]; then
+        VALIDATE_REASON="must be first-login or install"
+        return 1
+      fi
+      ;;
     HW_CHASSIS)
       if [[ $val != auto && $val != laptop && $val != desktop && $val != vm ]]; then
         VALIDATE_REASON="must be auto, laptop, desktop or vm"
@@ -297,7 +304,7 @@ canonicalize_locale() {
 validate_all() {
   canonicalize_locale
   local key
-  for key in HOSTNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_REPO \
+  for key in HOSTNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_REPO CHEZMOI_MODE \
              EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
     if ! validate_one "$key" "${!key}"; then
       echo "Invalid value for $key: $VALIDATE_REASON" >&2
@@ -1015,6 +1022,11 @@ prompt_missing() {
   if ! is_config_set CHEZMOI_REPO; then
     prompt_value CHEZMOI_REPO "chezmoi dotfiles repo (https://... or GitHub user/repo, empty to skip)"
   fi
+  if [[ -n $CHEZMOI_REPO ]] && ! is_config_set CHEZMOI_MODE; then
+    prompt_menu CHEZMOI_MODE "DOTFILES SETUP" "When should chezmoi apply this repository?" \
+      first-login "First interactive login (recommended)" \
+      install "During installation (requires sudo for scripts)"
+  fi
 }
 
 # --------------------------------------------------------------------------
@@ -1040,6 +1052,9 @@ confirm() {
   printf '  %-12s %s\n' "Swap:" "$SWAP"
   printf '  %-12s %s\n' "Hardware:" "${HW_SUMMARY:-unknown}"
   printf '  %-12s %s\n' "Dotfiles:" "${CHEZMOI_REPO:-none}"
+  if [[ -n $CHEZMOI_REPO ]]; then
+    printf '  %-12s %s\n' "Dotfiles run:" "$CHEZMOI_MODE"
+  fi
   echo "Press y to erase the disk and install, any other key aborts:"
   read -r -n1 -s answer || answer=""
   if [[ $answer != y && $answer != Y ]]; then
@@ -1166,7 +1181,7 @@ write_install_state() {
   {
     printf 'FORMAT=1\nVERSION=%s\nROOT_UUID=%s\nESP_UUID=%s\nTARGET_DISK=%s\nLAST_COMPLETED_STEP=%s\n' \
       "$INSTALLER_VERSION" "$ROOT_UUID" "$ESP_UUID" "$TARGET_DISK" "$INSTALL_STATE_STEP"
-    for key in HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP \
+    for key in HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_MODE \
                CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
       printf '%s=%s\n' "$key" "${!key-}"
     done
@@ -1448,12 +1463,118 @@ create_user() {
   fi
 }
 
+configure_chezmoi_first_login() {
+  local target=${1:-/mnt}
+  local config=$target/etc/void-installer/chezmoi.conf
+  local helper=$target/usr/local/sbin/void-installer-chezmoi
+  local profile=$target/home/$USERNAME/.bash_profile
+  if [[ -z $CHEZMOI_REPO || $CHEZMOI_MODE != first-login ]]; then
+    return 0
+  fi
+  if [[ -L $profile ]]; then
+    echo "Refusing to append the first-login hook to a symlinked .bash_profile." >&2
+    return 1
+  fi
+  mkdir -p "$target/etc/void-installer" "$target/usr/local/sbin"
+  printf 'USERNAME=%s\nREPOSITORY=%s\n' "$USERNAME" "$CHEZMOI_REPO" > "$config"
+  chmod 0644 "$config"
+  cat > "$helper" <<'CHEZMOI_EOF'
+#!/bin/bash
+set -Eeuo pipefail
+umask 077
+
+config=/etc/void-installer/chezmoi.conf
+expected_user=
+repository=
+while IFS='=' read -r key value; do
+  case $key in
+    USERNAME) expected_user=$value ;;
+    REPOSITORY) repository=$value ;;
+  esac
+done < "$config"
+if [[ -z $expected_user || -z $repository || $(id -un) != "$expected_user" || $EUID -eq 0 ]]; then
+  echo "This setup command is only available to the configured non-root user." >&2
+  exit 1
+fi
+if [[ ! -t 0 || ! -t 1 ]]; then
+  echo "Run this command from an interactive terminal." >&2
+  exit 1
+fi
+if (( $# > 1 )) || { (( $# == 1 )) && [[ $1 != --retry ]]; }; then
+  echo "Usage: void-installer-chezmoi [--retry]" >&2
+  exit 2
+fi
+
+state_dir="$HOME/.local/state/void-installer"
+mkdir -p "$state_dir"
+chmod 0700 "$state_dir"
+status_file="$state_dir/chezmoi.status"
+write_status() {
+  local tmp="$status_file.tmp.$$"
+  printf '%s\n' "$1" > "$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$status_file"
+}
+exec 9>"$state_dir/chezmoi.lock"
+if ! flock -n 9; then
+  echo "chezmoi setup is already running in another session." >&2
+  exit 1
+fi
+status=
+[[ -r $status_file ]] && IFS= read -r status < "$status_file" || true
+if [[ $status == complete ]]; then
+  exit 0
+fi
+if [[ ($status == failed || $status == running) && ${1:-} != --retry ]]; then
+  echo "chezmoi setup previously failed or was interrupted. Retry with: void-installer-chezmoi --retry" >&2
+  exit 1
+fi
+write_status running
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  if (( rc != 0 )); then
+    write_status failed || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+if ! command -v chezmoi >/dev/null 2>&1; then
+  echo "chezmoi is not installed. Install it, then run void-installer-chezmoi --retry." >&2
+  exit 1
+fi
+if [[ -d $HOME/.local/share/chezmoi ]]; then
+  chezmoi apply
+else
+  chezmoi init --apply "$repository"
+fi
+write_status complete
+trap - EXIT
+echo "chezmoi setup completed."
+CHEZMOI_EOF
+  chmod 0755 "$helper"
+  if [[ ! -e $profile ]]; then
+    : > "$profile"
+  fi
+  if ! grep -Fq '# void-installer chezmoi first-login hook' "$profile"; then
+    cat >> "$profile" <<'PROFILE_EOF'
+
+# void-installer chezmoi first-login hook
+if [[ $- == *i* && -t 0 && -t 1 ]]; then
+  /usr/local/sbin/void-installer-chezmoi || true
+fi
+PROFILE_EOF
+  fi
+  chroot "$target" chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bash_profile"
+  echo "Configured chezmoi to run on the user's first interactive login."
+}
+
 # --------------------------------------------------------------------------
 # chezmoi dotfiles (spec section 13)
 # --------------------------------------------------------------------------
 
 apply_chezmoi() {
-  if [[ -z $CHEZMOI_REPO ]]; then
+  if [[ -z $CHEZMOI_REPO || $CHEZMOI_MODE != install ]]; then
     return 0
   fi
   if [[ -e /mnt/etc/sudoers.d/99-installer ]]; then
@@ -1695,6 +1816,7 @@ step_configure() {
   setup_grub
   enable_services
   create_user
+  configure_chezmoi_first_login /mnt
 }
 
 step_wrappers() {

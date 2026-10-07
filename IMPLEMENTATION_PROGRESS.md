@@ -10,8 +10,8 @@ continue from the last completed checkpoint.
 | 1. Cleanup ownership and disk safety | 1.3.4 | Complete; pushed | Commit `3c26b75`; cleanup and account regression checks passed. |
 | 2. Logs, final checks, checkpoint records | 1.3.5 | Complete; pushed | Commit `f6eca17`; local syntax, cleanup/state redaction regressions, account regression, help, and diff checks passed. ShellCheck was unavailable locally. |
 | 3. EFI fallback boot | 1.3.6 | Complete; pushed | Commit `fefce60`; local Secure Boot and GRUB invocation regressions pass. OVMF boot remains a VM acceptance check. |
-| 4. Cached repository probes | 1.3.7 | Verified locally; awaiting commit/push | Signed local XBPS fixture confirms package/service outcomes and no repeat index downloads. |
-| 5. First-login chezmoi | 1.3.8 | Pending | Test tty/user gating, retries, concurrency, and the no-passwordless-sudo default. |
+| 4. Cached repository probes | 1.3.7 | Complete; pushed | Commit `e20ab3a`; signed local XBPS fixture confirms package/service outcomes and no repeat index downloads. |
+| 5. First-login chezmoi | 1.3.8 | Verified locally; awaiting commit/push | Helper regression covers setup hook idempotence, tty/user gating, retries, locking, and no passwordless sudo. |
 | 6. Target Wi-Fi profile | 1.3.9 | Pending | Test keyfile parsing, permissions, input validation, and secret exclusion. |
 | 7. Resume and repair modes | 1.3.10 | Pending | Inject checkpoint failures and prove resume/repair cannot format or partition. |
 
@@ -64,5 +64,12 @@ continue from the last completed checkpoint.
   confirms later queries do not refetch indexes. Service-file inspection can
   still fetch the corresponding package archive. Syntax and related cleanup,
   state, and boot regression checks pass; ShellCheck is unavailable locally.
-- Current next action: commit/push release 1.3.7, then implement first-login
-  chezmoi behavior.
+- Commit `e20ab3a` pushed to `origin/main` as release 1.3.7.
+- Increment 5 changes: `CHEZMOI_MODE` defaults to first-login and offers an
+  installation-time compatibility mode. The first-login helper checks the
+  configured user and tty, locks concurrent runs, records completion/failure,
+  and provides a manual retry without granting sudo.
+- Increment 5 verification: `bash -n`, chezmoi helper regression (including
+  generated hook idempotence), cleanup/state/boot regressions, and diff checks
+  pass. ShellCheck is unavailable locally. No implementation failure remains.
+- Current next action: commit/push 1.3.8, then add target Wi-Fi profiles.

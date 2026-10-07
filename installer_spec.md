@@ -37,6 +37,13 @@ decisions as each increment is released:
 - Before success, the installer verifies fstab UUID/mountpoint entries,
   matching kernel/initramfs files, GRUB configuration and EFI executable,
   required runit links, and sudo syntax.
+- If `CHEZMOI_REPO` is set, `CHEZMOI_MODE` defaults to `first-login`; valid
+  values are `first-login` and `install`. Interactive setup offers both.
+  First-login mode installs a root-owned helper and appends an idempotent hook
+  to the new user's Bash login profile. The helper runs only for that user on
+  an interactive tty, uses no passwordless sudo, takes a lock, and records
+  completion/failure in that user's private state directory. It attempts
+  automatically once; later retries require `--retry`.
 - GRUB installation must attempt the named `Void` EFI entry and install the
   removable-media path at `EFI/BOOT/BOOTX64.EFI` on every fresh install. A
   named-entry failure is a warning if fallback installation and validation
@@ -904,20 +911,36 @@ exec "$real" "$@"
 
 ---
 
-## 13. chezmoi dotfiles (`apply_chezmoi`)
+## 13. chezmoi dotfiles
 
-Runs in step 14, after the user exists and all packages are installed, before the wrappers are installed.
+Skipped if `CHEZMOI_REPO` is empty. `CHEZMOI_MODE` defaults to `first-login`;
+interactive users can choose that or `install`.
 
-**Skipped** if `CHEZMOI_REPO` is empty (continue silently).
+In `first-login` mode, after creating the user, write the repository and
+username to a root-owned, non-secret configuration file and install a
+root-owned helper at `/usr/local/sbin/void-installer-chezmoi`. Append one
+marked hook to the user's `.bash_profile`; repeated setup must not duplicate
+it. The hook calls the helper only from an interactive terminal. The helper
+checks that it runs as the configured non-root user, takes a per-user `flock`,
+and records `running`, `failed`, or `complete` in
+`~/.local/state/void-installer/chezmoi.status` (directory mode 0700 and file
+mode 0600). It runs automatically once. Failure or interruption requires the
+explicit `void-installer-chezmoi --retry` command on a later login.
 
-Because bootstrap scripts often run `sudo` (e.g. `sudo xbps-install`), the user gets a **temporary** passwordless sudo rule for the duration of this step:
+This mode must not create a passwordless sudoers rule. Run chezmoi as the
+interactive user, without `--force`; use `chezmoi apply` when a source
+directory already exists, otherwise use `chezmoi init --apply <repo>`.
+
+In `install` mode, retain the temporary setup behavior. Because bootstrap
+scripts often run `sudo` (e.g. `sudo xbps-install`), the user gets a temporary
+passwordless sudo rule for the duration of this step:
 
 ```bash
 printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$USERNAME" > /mnt/etc/sudoers.d/99-installer
 chmod 0440 /mnt/etc/sudoers.d/99-installer
 ```
 
-Run:
+Run in the chroot:
 
 ```bash
 chroot /mnt su - "$USERNAME" -c "chezmoi init --apply --force '$CHEZMOI_REPO'" </dev/null
@@ -925,7 +948,9 @@ chroot /mnt su - "$USERNAME" -c "chezmoi init --apply --force '$CHEZMOI_REPO'" <
 
 Then remove `/mnt/etc/sudoers.d/99-installer` immediately (also removed again in `finalize` and in `cleanup`, so an error can never leave it behind).
 
-**Failure policy:** a non-zero exit from chezmoi is **not fatal**. The installer sets `CHEZMOI_FAILED=1`, continues, and prints at the end:
+**Installation-mode failure policy:** a non-zero exit from chezmoi is
+**not fatal**. The installer sets `CHEZMOI_FAILED=1`, continues, and prints
+at the end:
 
 ```
 Warning: chezmoi failed. After first boot run:  chezmoi init --apply <CHEZMOI_REPO>
@@ -1042,7 +1067,10 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 12. **Snapper cleanup runs inside the wrapper** (no timers/cron), minimum age 0.
 13. **Default timezone `UTC`, locale `en_US.UTF-8`, keymap `us`, hostname `void`.**
 14. **Mirror** configurable but only the base URL (the installer appends `/current`).
-15. **Chezmoi runs in the chroot with temporary passwordless sudo**; failure is non-fatal.
+15. **Chezmoi runs on the first interactive user login by default** with
+    normal sudo prompts; `CHEZMOI_MODE=install` selects the legacy chroot run
+    with temporary passwordless sudo. First-login failure can be retried
+    explicitly and does not block login.
 16. **Limine** is explicitly out of scope; revisit when snapshot menu and kernel-update hooks are available for it on Void.
 17. **No special handling of `/boot` for compression.** GRUB has read zstd-compressed btrfs since 2.04, so `/boot` stays on the compressed `@` subvolume (no NOCOW flag).
 18. **No firewall and no syslog daemon in v1.** `openssh` is installed but no SSH server is enabled. Kernel messages remain available through `dmesg`. Both can be added through the dotfiles bootstrap or `EXTRA_PACKAGES`.
