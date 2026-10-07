@@ -92,4 +92,4 @@ continue from the last completed checkpoint.
   rerunning through the approved user namespace passed. Initial resume-test
   fixture omissions were corrected; no product-code failure remains.
 - Commit `c909a4a` pushed to `origin/main` as release 1.3.10. QEMU acceptance
-  tests T-27 and T-29 remain documented for real-VM validation.
+  tests T-28 and T-29 remain documented for real-VM validation.
