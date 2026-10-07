@@ -78,6 +78,11 @@ interactive tty login by default. If it fails or is interrupted, retry with
 `void-installer-chezmoi --retry`. Set `CHEZMOI_MODE=install` in the installer
 configuration to use installation-time setup instead.
 
+For Wi-Fi-only devices, configure an optional SSID and WPA-Personal password
+in `install.conf` (or choose a network interactively). The installer writes a
+root-only NetworkManager profile for first boot; the live ISO still requires
+an independent working connection during installation.
+
 ### Recovery if a password is lost
 
 If the user's password is lost, log in as root on tty1 and run `passwd youruser`.
@@ -124,4 +129,5 @@ python3 tests/cleanup-regression.py
 python3 tests/installer-state-regression.py
 python3 tests/boot-regression.py
 python3 tests/chezmoi-regression.py
+python3 tests/wifi-regression.py
 ```

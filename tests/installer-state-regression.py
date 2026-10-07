@@ -46,6 +46,10 @@ KEYMAP=us
 MIRROR=https://repo-default.voidlinux.org
 SWAP=zram
 CHEZMOI_MODE=first-login
+WIFI_SSID='Home network'
+WIFI_SECURITY=wpa-psk
+WIFI_HIDDEN=no
+WIFI_PASSWORD=wifi-secret
 CHEZMOI_REPO=example/dotfiles
 EXTRA_PACKAGES=
 HW_CHASSIS=auto
@@ -59,10 +63,11 @@ ROOT_PASSWORD_HASH='$6$root-hash-secret'
 """ + write_state + "write_install_state\n"
     subprocess.run(["bash", "-c", harness, "test", str(state)], check=True)
     contents = state.read_text()
-    for secret in ("user-secret", "user-hash-secret", "root-secret", "root-hash-secret"):
+    for secret in ("user-secret", "user-hash-secret", "root-secret", "root-hash-secret", "wifi-secret"):
         assert secret not in contents, contents
     assert "LAST_COMPLETED_STEP=10" in contents
     assert "FORMAT=1" in contents
+    assert "WIFI_SSID=Home network" in contents
 
     log = root / "install.log"
     step_harness = (

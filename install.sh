@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.8"
+INSTALLER_VERSION="1.3.9"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -108,7 +108,8 @@ load_config() {
       TARGET_DISK|HOSTNAME|USERNAME|USER_PASSWORD|USER_PASSWORD_HASH|\
       ROOT_PASSWORD|ROOT_PASSWORD_HASH|USER_SHELL|\
       TIMEZONE|LOCALE|KEYMAP|MIRROR|SWAP|CHEZMOI_REPO|EXTRA_PACKAGES|HW_CHASSIS|\
-      CHEZMOI_MODE|HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH)
+      CHEZMOI_MODE|WIFI_SSID|WIFI_SECURITY|WIFI_PASSWORD|WIFI_HIDDEN|\
+      HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH)
         ;;
       *)
         echo "Unsupported config key $key in $file at line $line_number." >&2
@@ -135,6 +136,13 @@ apply_defaults() {
   [[ -v SWAP ]] || SWAP=zram
   [[ -v CHEZMOI_REPO ]] || CHEZMOI_REPO=""
   [[ -v CHEZMOI_MODE ]] || CHEZMOI_MODE=first-login
+  [[ -v WIFI_SSID ]] || WIFI_SSID=""
+  [[ -v WIFI_SECURITY ]] || WIFI_SECURITY=wpa-psk
+  [[ -v WIFI_HIDDEN ]] || WIFI_HIDDEN=no
+  WIFI_SETUP=no
+  if [[ -n $WIFI_SSID ]]; then
+    WIFI_SETUP=yes
+  fi
   [[ -v EXTRA_PACKAGES ]] || EXTRA_PACKAGES=""
   [[ -v HW_CHASSIS ]] || HW_CHASSIS=auto
   [[ -v HW_TOUCH ]] || HW_TOUCH=auto
@@ -253,6 +261,32 @@ validate_one() {
         return 1
       fi
       ;;
+    WIFI_SSID)
+      local LC_ALL=C
+      if (( ${#val} < 1 || ${#val} > 32 )) || [[ $val =~ [[:cntrl:]] ]]; then
+        VALIDATE_REASON="must be 1 to 32 bytes and contain no control characters"
+        return 1
+      fi
+      ;;
+    WIFI_SECURITY)
+      if [[ $val != open && $val != wpa-psk ]]; then
+        VALIDATE_REASON="must be open or wpa-psk"
+        return 1
+      fi
+      ;;
+    WIFI_PASSWORD)
+      local LC_ALL=C
+      if ! [[ $val =~ ^[[:print:]]{8,63}$ || $val =~ ^[A-Fa-f0-9]{64}$ ]]; then
+        VALIDATE_REASON="must be 8 to 63 printable ASCII characters or a 64-digit hexadecimal PSK"
+        return 1
+      fi
+      ;;
+    WIFI_HIDDEN)
+      if [[ $val != yes && $val != no ]]; then
+        VALIDATE_REASON="must be yes or no"
+        return 1
+      fi
+      ;;
     HW_CHASSIS)
       if [[ $val != auto && $val != laptop && $val != desktop && $val != vm ]]; then
         VALIDATE_REASON="must be auto, laptop, desktop or vm"
@@ -305,6 +339,7 @@ validate_all() {
   canonicalize_locale
   local key
   for key in HOSTNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_REPO CHEZMOI_MODE \
+             WIFI_SECURITY WIFI_HIDDEN \
              EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
     if ! validate_one "$key" "${!key}"; then
       echo "Invalid value for $key: $VALIDATE_REASON" >&2
@@ -351,6 +386,25 @@ validate_all() {
     fi
   else
     echo "Missing required setting: ROOT_PASSWORD" >&2
+    exit 2
+  fi
+
+  if [[ -n $WIFI_SSID ]]; then
+    if ! validate_one WIFI_SSID "$WIFI_SSID"; then
+      echo "Invalid value for WIFI_SSID: $VALIDATE_REASON" >&2
+      exit 2
+    fi
+    if [[ $WIFI_SECURITY == wpa-psk ]]; then
+      if [[ ! -v WIFI_PASSWORD ]] || ! validate_one WIFI_PASSWORD "$WIFI_PASSWORD"; then
+        echo "WIFI_PASSWORD is required for WPA-Personal Wi-Fi and must be a valid passphrase or PSK." >&2
+        exit 2
+      fi
+    elif [[ -v WIFI_PASSWORD ]]; then
+      echo "WIFI_PASSWORD must be omitted when WIFI_SECURITY=open." >&2
+      exit 2
+    fi
+  elif [[ -v WIFI_PASSWORD ]] || is_config_set WIFI_SECURITY || is_config_set WIFI_HIDDEN; then
+    echo "WIFI_SSID is required when Wi-Fi settings are supplied." >&2
     exit 2
   fi
 
@@ -949,6 +1003,26 @@ prompt_root_password() {
   done
 }
 
+prompt_wifi_password() {
+  local p1 p2
+  while true; do
+    if ! p1=$(dialog --clear --title "WIFI_PASSWORD" --passwordbox \
+        "Wi-Fi password for $WIFI_SSID" 10 70 3>&1 1>&2 2>&3); then
+      exit 4
+    fi
+    if ! p2=$(dialog --clear --title "WIFI_PASSWORD" --passwordbox \
+        "Repeat Wi-Fi password" 10 70 3>&1 1>&2 2>&3); then
+      exit 4
+    fi
+    if [[ $p1 != "$p2" ]]; then
+      dialog --msgbox "Wi-Fi passwords do not match." 10 70 || exit 4
+      continue
+    fi
+    WIFI_PASSWORD=$p1
+    return 0
+  done
+}
+
 prompt_menu() {  # $1 = var, $2 = title, $3 = prompt text, rest = tag/desc pairs
   local var=$1 title=$2 text=$3 choice
   shift 3
@@ -1027,6 +1101,27 @@ prompt_missing() {
       first-login "First interactive login (recommended)" \
       install "During installation (requires sudo for scripts)"
   fi
+  if ! is_config_set WIFI_SSID; then
+    prompt_menu WIFI_SETUP "WI-FI NETWORK" "Save one Wi-Fi network for the installed system?" \
+      no "No, configure networking after installation" \
+      yes "Yes, save a network for first boot"
+  fi
+  if [[ $WIFI_SETUP == yes ]]; then
+    if ! is_config_set WIFI_SSID; then
+      prompt_value WIFI_SSID "Wi-Fi network name (SSID)"
+    fi
+    if ! is_config_set WIFI_SECURITY; then
+      prompt_menu WIFI_SECURITY "WI-FI SECURITY" "Select the network security type" \
+        wpa-psk "WPA-Personal" open "Open network"
+    fi
+    if [[ $WIFI_SECURITY == wpa-psk ]] && ! is_config_set WIFI_PASSWORD; then
+      prompt_wifi_password
+    fi
+    if ! is_config_set WIFI_HIDDEN; then
+      prompt_menu WIFI_HIDDEN "HIDDEN WI-FI" "Does this network hide its name?" \
+        no "No" yes "Yes"
+    fi
+  fi
 }
 
 # --------------------------------------------------------------------------
@@ -1055,6 +1150,7 @@ confirm() {
   if [[ -n $CHEZMOI_REPO ]]; then
     printf '  %-12s %s\n' "Dotfiles run:" "$CHEZMOI_MODE"
   fi
+  printf '  %-12s %s\n' "Wi-Fi:" "${WIFI_SSID:-none}"
   echo "Press y to erase the disk and install, any other key aborts:"
   read -r -n1 -s answer || answer=""
   if [[ $answer != y && $answer != Y ]]; then
@@ -1182,6 +1278,7 @@ write_install_state() {
     printf 'FORMAT=1\nVERSION=%s\nROOT_UUID=%s\nESP_UUID=%s\nTARGET_DISK=%s\nLAST_COMPLETED_STEP=%s\n' \
       "$INSTALLER_VERSION" "$ROOT_UUID" "$ESP_UUID" "$TARGET_DISK" "$INSTALL_STATE_STEP"
     for key in HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP CHEZMOI_MODE \
+               WIFI_SSID WIFI_SECURITY WIFI_HIDDEN \
                CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
       printf '%s=%s\n' "$key" "${!key-}"
     done
@@ -1331,6 +1428,63 @@ configure_system() {
       fi
     done
   fi
+  write_wifi_profile /mnt
+}
+
+escape_nm_keyfile_value() {
+  local value=${1//\\/\\\\}
+  if [[ $value == ' '* ]]; then
+    value="\\s${value:1}"
+  fi
+  if [[ $value == *' ' ]]; then
+    value="${value:0:${#value}-1}\\s"
+  fi
+  printf '%s' "$value"
+}
+
+write_wifi_profile() {  # $1 = target root (defaults to /mnt)
+  local target=${1:-/mnt} directory file ssid password
+  [[ -n $WIFI_SSID ]] || return 0
+  directory="$target/etc/NetworkManager/system-connections"
+  file="$directory/installer-wifi.nmconnection"
+  mkdir -p "$directory"
+  chmod 0700 "$directory"
+  ssid=$(escape_nm_keyfile_value "$WIFI_SSID")
+  {
+    cat <<'NM_EOF'
+[connection]
+id=Installer Wi-Fi
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+NM_EOF
+    printf 'ssid=%s\n' "$ssid"
+    if [[ $WIFI_HIDDEN == yes ]]; then
+      printf 'hidden=true\n'
+    fi
+    if [[ $WIFI_SECURITY == wpa-psk ]]; then
+      password=$(escape_nm_keyfile_value "$WIFI_PASSWORD")
+      cat <<'NM_EOF'
+
+[wifi-security]
+key-mgmt=wpa-psk
+NM_EOF
+      printf 'psk=%s\n' "$password"
+    fi
+    cat <<'NM_EOF'
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+NM_EOF
+  } > "$file"
+  chown root:root "$file"
+  chmod 0600 "$file"
+  echo "Saved the Wi-Fi profile for first boot with root-only permissions."
 }
 
 # --------------------------------------------------------------------------
@@ -1789,6 +1943,13 @@ validate_target_installation() {
   if (( found_efi == 0 )); then
     echo "GRUB EFI executable is missing from the EFI partition." >&2
     return 1
+  fi
+  if [[ -f /mnt/etc/NetworkManager/system-connections/installer-wifi.nmconnection ]]; then
+    if ! chroot /mnt nmcli --offline connection modify type wifi \
+        < /mnt/etc/NetworkManager/system-connections/installer-wifi.nmconnection >/dev/null 2>&1; then
+      echo "The installed NetworkManager could not parse its Wi-Fi profile." >&2
+      return 1
+    fi
   fi
   if [[ ! -s /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI ]]; then
     echo "EFI removable-media fallback executable is missing." >&2

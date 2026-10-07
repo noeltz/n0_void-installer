@@ -44,6 +44,12 @@ decisions as each increment is released:
   an interactive tty, uses no passwordless sudo, takes a lock, and records
   completion/failure in that user's private state directory. It attempts
   automatically once; later retries require `--retry`.
+- An optional target Wi-Fi profile uses `WIFI_SSID`, `WIFI_SECURITY=open|wpa-psk`,
+  `WIFI_PASSWORD`, and `WIFI_HIDDEN=yes|no`. A system-connection keyfile is
+  written mode 0600; credentials are excluded from logs and state. The live ISO
+  still requires its own network connection. The completed target validates
+  the generated file through `nmcli --offline` with output suppressed so its
+  secret is not copied into the installation log.
 - GRUB installation must attempt the named `Void` EFI entry and install the
   removable-media path at `EFI/BOOT/BOOTX64.EFI` on every fresh install. A
   named-entry failure is a warning if fallback installation and validation

@@ -77,6 +77,14 @@ ROOT_PASSWORD=change-this-root-password
 # This setting is ignored when CHEZMOI_REPO is empty.
 #CHEZMOI_MODE=first-login
 
+# Optional Wi-Fi profile for the installed system. The live ISO still needs
+# its own working network connection. Supported security: open or WPA-Personal.
+# The password is saved only in a mode-0600 NetworkManager keyfile on target.
+#WIFI_SSID=Home network
+#WIFI_SECURITY=wpa-psk
+#WIFI_PASSWORD='replace-with-your-Wi-Fi-password'
+#WIFI_HIDDEN=no
+
 # Extra packages to install (space-separated). Each name is verified against
 # the mirror before anything is written to disk. Default: empty
 #EXTRA_PACKAGES=htop tmux

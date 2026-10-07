@@ -11,8 +11,8 @@ continue from the last completed checkpoint.
 | 2. Logs, final checks, checkpoint records | 1.3.5 | Complete; pushed | Commit `f6eca17`; local syntax, cleanup/state redaction regressions, account regression, help, and diff checks passed. ShellCheck was unavailable locally. |
 | 3. EFI fallback boot | 1.3.6 | Complete; pushed | Commit `fefce60`; local Secure Boot and GRUB invocation regressions pass. OVMF boot remains a VM acceptance check. |
 | 4. Cached repository probes | 1.3.7 | Complete; pushed | Commit `e20ab3a`; signed local XBPS fixture confirms package/service outcomes and no repeat index downloads. |
-| 5. First-login chezmoi | 1.3.8 | Verified locally; awaiting commit/push | Helper regression covers setup hook idempotence, tty/user gating, retries, locking, and no passwordless sudo. |
-| 6. Target Wi-Fi profile | 1.3.9 | Pending | Test keyfile parsing, permissions, input validation, and secret exclusion. |
+| 5. First-login chezmoi | 1.3.8 | Complete; pushed | Commit `74ee39c`; helper regression covers hook idempotence, tty/user gating, retries, locking, and no passwordless sudo. |
+| 6. Target Wi-Fi profile | 1.3.9 | Verified locally; awaiting commit/push | Offline nmcli parses generated profiles; Wi-Fi and state regressions verify escaping, permissions, bounds, and secret exclusion. |
 | 7. Resume and repair modes | 1.3.10 | Pending | Inject checkpoint failures and prove resume/repair cannot format or partition. |
 
 ## Session notes
@@ -72,4 +72,14 @@ continue from the last completed checkpoint.
 - Increment 5 verification: `bash -n`, chezmoi helper regression (including
   generated hook idempotence), cleanup/state/boot regressions, and diff checks
   pass. ShellCheck is unavailable locally. No implementation failure remains.
-- Current next action: commit/push 1.3.8, then add target Wi-Fi profiles.
+- Commit `74ee39c` pushed to `origin/main` as release 1.3.8.
+- Increment 6 changes: optional interactive/configured open or WPA-Personal
+  profile, hidden-network setting, strict SSID/passphrase checks, escaped
+  keyfile values, mode-0600 secret file, and secret-free checkpoint/log data.
+  The final target check parses the generated profile with offline nmcli.
+- Increment 6 verification: Wi-Fi profile, installer-state, cleanup, EFI,
+  chezmoi, and syntax regressions pass; `git diff --check` passes. An initial
+  test fixture used an unquoted SSID with a space and failed; quoting the
+  fixture corrected it. No product-code failure remains. ShellCheck is
+  unavailable locally.
+- Current next action: commit/push release 1.3.9, then implement resume/repair.
