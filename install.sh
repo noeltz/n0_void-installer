@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.12"
+INSTALLER_VERSION="1.3.13"
 INSTALLER_TOTAL_STEPS=24
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
@@ -1949,6 +1949,7 @@ menu_logout_command = wayland-logout
 clock_format = %a %H:%M
 
 [background]
+image = /usr/share/wf-shell/backgrounds/wallpaper.jpg
 fill_mode = fill_and_crop
 SHELL_CONFIG_EOF
   local marker="$target/etc/void-installer/desktop.conf"
@@ -2124,6 +2125,19 @@ for name in ("wayfire.ini", "wf-shell.ini"):
     config = configparser.ConfigParser(interpolation=None, strict=False)
     with open(path) as file:
         config.read_file(file)
+    if name == "wayfire.ini" and os.path.exists("/usr/local/sbin/void-installer-chezmoi-gui"):
+        if ("autostart" not in config.get("core", "plugins", fallback="").split()
+                or config.get("autostart", "void_installer_chezmoi", fallback="")
+                != "/usr/local/sbin/void-installer-chezmoi-gui"):
+            sys.exit("Wayfire's graphical first-login setup hook is missing or invalid.")
+if os.path.exists("/usr/local/sbin/void-installer-chezmoi-gui"):
+    for path in ("/usr/local/sbin/void-installer-chezmoi", "/usr/local/sbin/void-installer-chezmoi-gui"):
+        if os.path.islink(path) or not os.access(path, os.X_OK) or os.stat(path).st_uid != 0:
+            sys.exit("First-login setup helper is missing or not owned by root.")
+    with open("/etc/void-installer/chezmoi.conf") as file:
+        setup = dict(line.rstrip("\n").split("=", 1) for line in file)
+    if setup.get("USERNAME") != user or not setup.get("REPOSITORY"):
+        sys.exit("First-login setup configuration does not match the desktop user.")
 DESKTOP_CHECK_EOF
 }
 
@@ -2131,14 +2145,17 @@ configure_chezmoi_first_login() {
   local target=${1:-/mnt}
   local config=$target/etc/void-installer/chezmoi.conf
   local helper=$target/usr/local/sbin/void-installer-chezmoi
+  local gui=$target/usr/local/sbin/void-installer-chezmoi-gui path
   local profile=$target/home/$USERNAME/.bash_profile
   if [[ -z $CHEZMOI_REPO || $CHEZMOI_MODE != first-login ]]; then
     return 0
   fi
-  if [[ -L $profile ]]; then
-    echo "Refusing to append the first-login hook to a symlinked .bash_profile." >&2
-    return 1
-  fi
+  for path in "$config" "$helper" "$gui" "$profile"; do
+    if [[ -L $path || ( -e $path && ! -f $path ) ]]; then
+      echo "Unsafe first-login setup destination: $path" >&2
+      return 1
+    fi
+  done
   mkdir -p "$target/etc/void-installer" "$target/usr/local/sbin"
   printf 'USERNAME=%s\nREPOSITORY=%s\n' "$USERNAME" "$CHEZMOI_REPO" > "$config"
   chmod 0644 "$config"
@@ -2199,10 +2216,13 @@ on_exit() {
   trap - EXIT
   if (( rc != 0 )); then
     write_status failed || true
+    echo "chezmoi setup failed or was interrupted. Retry in a terminal with: void-installer-chezmoi --retry" >&2
   fi
   exit "$rc"
 }
 trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 if ! command -v chezmoi >/dev/null 2>&1; then
   echo "chezmoi is not installed. Install it, then run void-installer-chezmoi --retry." >&2
   exit 1
@@ -2217,6 +2237,41 @@ trap - EXIT
 echo "chezmoi setup completed."
 CHEZMOI_EOF
   chmod 0755 "$helper"
+  cat > "$gui" <<'CHEZMOI_GUI_EOF'
+#!/bin/bash
+set -Eeuo pipefail
+umask 077
+
+config=/etc/void-installer/chezmoi.conf
+expected_user=
+repository=
+while IFS='=' read -r key value; do
+  case $key in
+    USERNAME) expected_user=$value ;;
+    REPOSITORY) repository=$value ;;
+  esac
+done < "$config"
+if [[ -z $expected_user || -z $repository || $(id -un) != "$expected_user" || $EUID -eq 0 || -z ${WAYLAND_DISPLAY:-} ]]; then
+  exit 0
+fi
+state_dir="$HOME/.local/state/void-installer"
+mkdir -p "$state_dir"
+chmod 0700 "$state_dir"
+# Keep one setup terminal open at a time, including while kitty holds output.
+exec 8>"$state_dir/chezmoi-gui.lock"
+flock -n 8 || exit 0
+# Check the console helper's lock before opening a terminal. The helper takes
+# it again inside kitty; it remains the authority if a tty login races us.
+exec 9>"$state_dir/chezmoi.lock"
+flock -n 9 || exit 0
+status=
+[[ -r $state_dir/chezmoi.status ]] && IFS= read -r status < "$state_dir/chezmoi.status" || true
+case $status in complete|failed|running) exit 0 ;; esac
+flock -u 9
+exec 9>&-
+kitty --hold --title "Void dotfiles setup" /usr/local/sbin/void-installer-chezmoi
+CHEZMOI_GUI_EOF
+  chmod 0755 "$gui"
   if [[ ! -e $profile ]]; then
     : > "$profile"
   fi
@@ -2230,7 +2285,51 @@ fi
 PROFILE_EOF
   fi
   chroot "$target" chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bash_profile"
-  echo "Configured chezmoi to run on the user's first interactive login."
+  chroot "$target" python3 - "$USERNAME" <<'CHEZMOI_AUTOSTART_EOF'
+import configparser
+import os
+import pathlib
+import re
+import sys
+import tempfile
+
+path = pathlib.Path(f"/home/{sys.argv[1]}/.config/wayfire.ini")
+if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+    raise SystemExit("Safe Wayfire configuration is required for first-login setup.")
+original = path.read_text()
+config = configparser.ConfigParser(interpolation=None, strict=False)
+config.read_string(original)
+if "autostart" not in config.get("core", "plugins", fallback="").split():
+    raise SystemExit("Wayfire's autostart plugin is required for first-login setup.")
+key = "void_installer_chezmoi"
+command = "/usr/local/sbin/void-installer-chezmoi-gui"
+current = config.get("autostart", key, fallback=None)
+if current is not None:
+    if current != command:
+        raise SystemExit("Existing Wayfire first-login entry differs; refusing to overwrite it.")
+    raise SystemExit(0)
+lines = original.splitlines(keepends=True)
+for index, line in enumerate(lines):
+    if re.match(r"^\s*\[autostart\]\s*(?:#.*)?$", line):
+        if not line.endswith("\n"):
+            lines[index] += "\n"
+        lines.insert(index + 1, f"{key} = {command}\n")
+        break
+else:
+    lines.append(f"\n[autostart]\n{key} = {command}\n")
+info = path.stat()
+fd, name = tempfile.mkstemp(prefix=".wayfire.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w") as file:
+        file.write("".join(lines))
+        os.fchown(file.fileno(), info.st_uid, info.st_gid)
+        os.fchmod(file.fileno(), info.st_mode & 0o777)
+    os.replace(name, path)
+finally:
+    if os.path.exists(name):
+        os.unlink(name)
+CHEZMOI_AUTOSTART_EOF
+  echo "Configured first-login chezmoi in kitty and on the recovery console."
 }
 
 # --------------------------------------------------------------------------

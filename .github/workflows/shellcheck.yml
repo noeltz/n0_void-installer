@@ -16,20 +16,24 @@ jobs:
       - name: ShellCheck install.sh
         run: shellcheck install.sh
 
-      # The embedded heredocs are invisible to ShellCheck; extract the
-      # script-type heredoc (the xbps wrapper, delimiter WRAPPER_EOF) and
-      # check it separately (installer_spec.md section 3.1).
-      - name: ShellCheck embedded xbps wrapper
+      # Script heredocs are invisible to ShellCheck; check every generated helper.
+      - name: ShellCheck embedded helpers
         run: |
-          start=$(grep -n "<<'WRAPPER_EOF'" install.sh | head -1 | cut -d: -f1)
-          end=$(grep -n '^WRAPPER_EOF$' install.sh | head -1 | cut -d: -f1)
-          test -n "$start" -a -n "$end"
-          sed -n "$((start+1)),$((end-1))p" install.sh > wrapper.sh
-          shellcheck wrapper.sh
+          python3 - <<'PY'
+          import pathlib, subprocess
+          text = pathlib.Path('install.sh').read_text()
+          for tag in ('WRAPPER_EOF', 'CHEZMOI_EOF', 'CHEZMOI_GUI_EOF'):
+              body = text.split("<<'" + tag + "'\n", 1)[1].split('\n' + tag, 1)[0]
+              path = pathlib.Path('/tmp/void-installer-' + tag + '.sh')
+              path.write_text(body + '\n')
+              subprocess.run(['shellcheck', str(path)], check=True)
+          PY
 
       - name: Desktop, state and resume regression checks
         run: |
           python3 tests/desktop-regression.py
           python3 tests/greetd-regression.py
+          python3 tests/chezmoi-regression.py
+          python3 tests/graphical-chezmoi-regression.py
           python3 tests/installer-state-regression.py
           python3 tests/resume-repair-regression.py

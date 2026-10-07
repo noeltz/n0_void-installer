@@ -41,7 +41,7 @@ decisions as each increment is released:
   values are `first-login` and `install`. Interactive setup offers both.
   First-login mode installs a root-owned helper and appends an idempotent hook
   to the new user's Bash login profile. The helper runs only for that user on
-  an interactive tty, uses no passwordless sudo, takes a lock, and records
+  an interactive terminal (kitty on first Wayfire login or the console), uses no passwordless sudo, takes a lock, and records
   completion/failure in that user's private state directory. It attempts
   automatically once; later retries require `--retry`.
 - An optional target Wi-Fi profile uses `WIFI_SSID`, `WIFI_SECURITY=open|wpa-psk`,
@@ -1000,6 +1000,21 @@ and records `running`, `failed`, or `complete` in
 mode 0600). It runs automatically once. Failure or interruption requires the
 explicit `void-installer-chezmoi --retry` command on a later login.
 
+Also install `/usr/local/sbin/void-installer-chezmoi-gui` and add exactly one
+`void_installer_chezmoi` entry in Wayfire's `[autostart]` section while
+preserving other settings/comments/ownership. Require the autostart plugin.
+The GUI launcher runs only for the configured non-root user in Wayland,
+skips complete/failed/interrupted state, and checks the helper's shared lock
+before launching `kitty --hold --title "Void dotfiles setup"` with the helper
+as its command. A separate GUI lock prevents duplicate terminals while output
+is held. The helper takes the application lock again inside the interactive
+terminal; a racing console login can never cause concurrent application.
+Failures show the manual retry command; successful/failed terminal output
+remains visible until the user closes kitty. Empty repositories and install
+mode create no first-login helper or autostart hook. Final desktop validation
+checks the managed GUI entry, executable root-owned helpers and user/repository
+configuration when the GUI helper exists; older targets remain repairable.
+
 This mode must not create a passwordless sudoers rule. Run chezmoi as the
 interactive user, without `--force`; use `chezmoi apply` when a source
 directory already exists, otherwise use `chezmoi init --apply <repo>`.
@@ -1087,8 +1102,8 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-12 | Run 12 install/remove transactions | at most 10 snapshot units remain (see 10.8); oldest are deleted; `Initial installation` is eventually removed |
 | T-13 | Kernel update (`xbps-install -Su` with a newer kernel available, or `xbps-reconfigure -fa`; note `xbps-reconfigure -f linux` only touches the meta package and does not run kernel hooks) | grub.cfg regenerated, system still boots, snapshot taken |
 | T-14 | Boot a snapshot entry from the GRUB snapshots submenu | system boots; `findmnt -no OPTIONS /` contains `ro` |
-| T-15 | `CHEZMOI_REPO` set to a public test repo with a bootstrap script | files present in `$HOME`, bootstrap effects visible; no `99-installer` sudoers file remains |
-| T-16 | `CHEZMOI_REPO` set to a nonexistent repo | installer completes, prints the chezmoi warning, exit 0 |
+| T-15 | `CHEZMOI_REPO` set to a public test repo with a bootstrap script, default mode; log in through Wayfire | kitty visibly runs setup with normal sudo prompts; files/bootstrap effects present; no temporary passwordless sudoers file |
+| T-16 | `CHEZMOI_REPO` set to a nonexistent repo; log in through Wayfire | installation completes; held kitty shows failure and retry instructions; subsequent login does not auto-retry |
 | T-17 | VM detection | `qemu-ga` and `spice-vdagentd` services exist and are `run`; no `tlp` |
 | T-18 | `SWAP=none` | no zram, no `zramen` service |
 | T-19 | Log in on tty1 as root and as the new user; run `sudo` as the new user | both logins work with their separate configured passwords; sudo works with the user's password |
@@ -1107,6 +1122,8 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-31 | Unattended install with an unsupported/custom KEYMAP | fails before partitioning with a supported-conversion diagnostic |
 
 | T-32 | Reboot, log in through tuigreet, log out, and log in again; Ctrl+Alt+F1 console login as root and user | native session has a D-Bus session bus; last username/session remembered; tty1 accepts both configured passwords; no tty7 agetty collision |
+
+| T-33 | Complete first-login GUI setup, log out/in; also log in on tty1; test failed/interrupted run and manual `--retry` | completion suppresses later setup; no concurrent GUI/tty application; failed/interrupted setup needs explicit retry; kitty keeps output visible |
 
 ### 15.2 Phase 2 — physical laptop
 
@@ -1148,7 +1165,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 13. **Default timezone `UTC`, locale `en_US.UTF-8`, keymap `us`, hostname `void`.**
 14. **Mirror** configurable but only the base URL (the installer appends `/current`).
 15. **Chezmoi runs on the first interactive user login by default** with
-    normal sudo prompts; `CHEZMOI_MODE=install` selects the legacy chroot run
+    normal sudo prompts (kitty on first Wayfire login or the console); `CHEZMOI_MODE=install` selects the legacy chroot run
     with temporary passwordless sudo. First-login failure can be retried
     explicitly and does not block login.
 16. **Limine** is explicitly out of scope; revisit when snapshot menu and kernel-update hooks are available for it on Void.

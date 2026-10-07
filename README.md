@@ -108,10 +108,12 @@ an application menu, kitty launcher, network status, battery and clock.
 (including German, French, British, Brazilian and Dvorak) have explicit XKB
 conversions; unknown or custom maps are rejected before disk changes.
 
-When a chezmoi repository is configured, setup runs on the user's first
-interactive tty login by default. If it fails or is interrupted, retry with
-`void-installer-chezmoi --retry`. Set `CHEZMOI_MODE=install` in the installer
-configuration to use installation-time setup instead.
+When a chezmoi repository is configured, the first Wayfire login opens its
+setup in kitty, with normal sudo password prompts. The terminal stays open
+so you can read the result. First console login can run the same setup; shared
+state and locking prevent it from being applied twice. If it fails or is
+interrupted, open a terminal and run `void-installer-chezmoi --retry`.
+Set `CHEZMOI_MODE=install` to use installation-time setup instead.
 
 For Wi-Fi-only devices, configure an optional SSID and WPA-Personal password
 in `install.conf` (or choose a network interactively). The installer writes a
@@ -133,14 +135,16 @@ chroot /mnt passwd root
 ## Development
 
 The installer implements `installer_spec.md` (binding specification).
-ShellCheck must pass cleanly, including on the embedded xbps wrapper
-(extracted and checked separately in CI).
+ShellCheck must pass cleanly, including on the embedded xbps wrapper and
+first-login helpers (extracted and checked separately in CI).
 
 Desktop configuration and checkpoint failure checks run without a VM:
 
 ```sh
 python3 tests/desktop-regression.py
 python3 tests/greetd-regression.py
+python3 tests/chezmoi-regression.py
+python3 tests/graphical-chezmoi-regression.py
 python3 tests/resume-repair-regression.py
 python3 tests/installer-state-regression.py
 ```

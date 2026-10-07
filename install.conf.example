@@ -54,7 +54,7 @@ ROOT_PASSWORD=change-this-root-password
 # glibc locale. Default: en_US.UTF-8. Must exist in /etc/default/libc-locales.
 #LOCALE=en_US.UTF-8
 
-# Console and Wayfire keyboard (validated with loadkeys + explicit XKB mapping).
+# Console, tuigreet and Wayfire keyboard (loadkeys + explicit XKB mapping).
 # Default: us. Examples: uk, de, de-latin1-nodeadkeys, fr, fr-latin9,
 # fr-bepo, br-abnt2, dvorak, dvorak-programmer, es, it, pt, pl2, cz-qwerty.
 # Named .map/.map.gz forms also work. Unknown/custom maps are rejected before
@@ -75,8 +75,8 @@ ROOT_PASSWORD=change-this-root-password
 # skip dotfiles entirely. Default: empty
 #CHEZMOI_REPO=alice/dotfiles
 
-# Dotfiles setup: first-login (default) runs once in the user's first
-# interactive tty login with normal sudo prompts; install runs it in the
+# Dotfiles setup: first-login (default) opens kitty on first Wayfire login,
+# or runs at first console login, with normal sudo prompts; install runs it in the
 # installation chroot using a temporary passwordless sudo rule.
 # This setting is ignored when CHEZMOI_REPO is empty.
 #CHEZMOI_MODE=first-login

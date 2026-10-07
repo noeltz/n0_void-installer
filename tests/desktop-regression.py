@@ -90,7 +90,9 @@ with tempfile.TemporaryDirectory(prefix="void-desktop-regression-") as directory
     session = root / "usr/share/wayland-sessions/wayfire.desktop"
     session.parent.mkdir(parents=True)
     session.write_text("[Desktop Entry]\nExec=wayfire\nName=Wayfire\nType=Application\n")
-    isolated = validator.replace('"/usr/', f'"{root}/usr/').replace('f"/home/', f'f"{root}/home/')
+    isolated = validator.replace('"/usr/', f'"{root}/usr/').replace('"/etc/', f'"{root}/etc/').replace('f"/home/', f'f"{root}/home/')
+    isolated = isolated.replace(f'!= "{root}/usr/local/sbin/void-installer-chezmoi-gui"',
+                                '!= "/usr/local/sbin/void-installer-chezmoi-gui"')
     isolated = isolated.replace("pwd.getpwnam(user).pw_uid", str(os.getuid()))
     for variant, code in (("nodeadkeys", 0), ("nonexistent", 1)):
         result = subprocess.run(["python3", "-c", isolated, "fixture", "de", variant, "pc105"],
@@ -100,5 +102,45 @@ with tempfile.TemporaryDirectory(prefix="void-desktop-regression-") as directory
     result = subprocess.run(["python3", "-c", isolated, "fixture", "de", "nodeadkeys", "pc105"],
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert result.returncode != 0 and "session" in result.stderr, result.stderr
+
+    session.write_text("[Desktop Entry]\nExec=wayfire\n")
+    helpers = root / "usr/local/sbin"
+    helpers.mkdir(parents=True)
+    for name in ("void-installer-chezmoi", "void-installer-chezmoi-gui"):
+        path = helpers / name
+        path.write_text("#!/bin/bash\nexit 0\n")
+        path.chmod(0o755)
+    setup = root / "etc/void-installer/chezmoi.conf"
+    setup.write_text("USERNAME=fixture\nREPOSITORY=example/dotfiles\n")
+    isolated = isolated.replace("os.stat(path).st_uid != 0", f"os.stat(path).st_uid != {os.getuid()}")
+
+    def check_gui():
+        return subprocess.run(["python3", "-c", isolated, "fixture", "de", "nodeadkeys", "pc105"],
+                              text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    result = check_gui()
+    assert result.returncode != 0 and "first-login setup hook" in result.stderr, result.stderr
+    ini = configparser.ConfigParser(interpolation=None)
+    ini.read(wayfire)
+    ini.set("autostart", "void_installer_chezmoi", "/usr/local/sbin/void-installer-chezmoi-gui")
+    with wayfire.open("w") as file:
+        ini.write(file)
+    result = check_gui()
+    assert result.returncode == 0, result.stderr
+    setup.write_text("USERNAME=wrong-user\nREPOSITORY=example/dotfiles\n")
+    result = check_gui()
+    assert result.returncode != 0 and "does not match" in result.stderr, result.stderr
+
+# If the host has XKB rules, also check every conversion against the real
+# registry rather than relying only on the small deterministic target fixture.
+registry_path = pathlib.Path("/usr/share/X11/xkb/rules/evdev.xml")
+if registry_path.exists():
+    registry = ET.parse(registry_path).getroot()
+    layouts = {item.findtext("configItem/name"): item for item in registry.findall("layoutList/layout")}
+    models = {item.findtext("configItem/name") for item in registry.findall("modelList/model")}
+    for layout, variant, model in maps.values():
+        assert layout in layouts and model in models, (layout, model)
+        assert not variant or variant in {item.findtext("configItem/name")
+               for item in layouts[layout].findall("variantList/variant")}, (layout, variant)
 
 print("Verified: desktop keyboard conversion, usable baseline, preservation, symlink rejection and final validation.")

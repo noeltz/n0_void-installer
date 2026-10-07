@@ -10,8 +10,8 @@ recovery action are recorded here.
 | Increment | Release | Status | Verification / next action |
 |---|---:|---|---|
 | Wayfire, wf-shell, kitty and synchronized keyboard | 1.3.11 | Complete; pushed | Commit `83dc0f6`; all regressions, ShellCheck and syntax pass. |
-| Greetd and tuigreet on tty7 | 1.3.12 | Verified; ready to push | Greetd/desktop and existing regressions, bootstrap, ShellCheck and syntax pass. |
-| Graphical first-login chezmoi | 1.3.13 | Pending | Test visible kitty setup, shared locking, completion and explicit retry. |
+| Greetd and tuigreet on tty7 | 1.3.12 | Complete; pushed | Commit `9bb6160`; Greetd/desktop and existing regressions, bootstrap, ShellCheck and syntax pass. |
+| Graphical first-login chezmoi | 1.3.13 | Verified; ready to push | All eleven regressions pass; installer and three embedded scripts pass ShellCheck; syntax/help/diff checks pass. |
 
 Decisions: install only the five requested packages and their dependencies;
 greetd uses tty7, tty1 remains a recovery console; derive Wayfire XKB settings
@@ -25,8 +25,10 @@ from KEYMAP without a separate setting; open first-login setup in kitty.
 - Increment 1 pushed as `83dc0f6`. Increment 2 retains Void's `_greeter` account, packaged PAM and runit service; enables greetd and removes only the tty7 agetty link.
 - Actual Void greetd package configuration and tuigreet 0.11.1 source verified: first discovered native session is selected automatically; remembered sessions keep using the wrapper.
 - Increment 2 test note: the bootstrap fixture's localhost socket was blocked in the sandbox; rerun with network permission. No product-code failure remains.
-- Current next action: verify and push increment 2, then add visible graphical chezmoi setup.
-- VM acceptance: T-30/T-31 pending; this workspace has no VM runner.
+- Increment 2 pushed as `9bb6160`. Increment 3 adds a Wayfire autostart launcher for kitty, checks the shared setup lock/state before launch, and holds a separate GUI lock while output remains visible.
+- Increment 3 verification: PTY GUI helper, shared console/GUI locking, completion/failure/interruption gating, no duplicate terminals, skipped empty/install modes, autostart preservation and final hook/config checks pass. An expanded validator fixture initially rewrote a literal command comparison as a target path; the fixture adaptation was corrected and rerun.
+- Current next action: commit and push increment 3, then record final delivery.
+- VM acceptance: T-30–T-33 pending; this workspace has no VM runner. Use a fresh install for desktop/greetd/first-login acceptance. Resume still requires the exact initiating version.
 
 Implementation is split into seven independently reviewed releases. A later
 increment starts only after the current increment's checks pass and its commit

@@ -60,7 +60,16 @@ with tempfile.TemporaryDirectory(prefix="void-chezmoi-regression-") as directory
     assert profile.read_text().count("# void-installer chezmoi first-login hook") == 1
     configured_helper = target / "usr/local/sbin/void-installer-chezmoi"
     assert configured_helper.stat().st_mode & 0o111
+    configured_gui = target / "usr/local/sbin/void-installer-chezmoi-gui"
+    assert configured_gui.stat().st_mode & 0o111
     assert not (target / "etc/sudoers.d/99-installer").exists()
+
+    for suffix, repo, mode in (("no-repo", "", "first-login"), ("install", "example/dotfiles", "install")):
+        skipped_target = root / suffix
+        script = config_harness.split(f"configure_chezmoi_first_login {target}")[0]
+        script += f"\nCHEZMOI_REPO='{repo}'\nCHEZMOI_MODE={mode}\nconfigure_chezmoi_first_login {skipped_target}\n"
+        subprocess.run(["bash", "-c", script], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert not skipped_target.exists(), skipped_target
 
     bin_dir = root / "bin"
     bin_dir.mkdir()
