@@ -2202,7 +2202,7 @@ if ! flock -n 9; then
   exit 1
 fi
 status=
-[[ -r $status_file ]] && IFS= read -r status < "$status_file" || true
+if [[ -r $status_file ]]; then IFS= read -r status < "$status_file" || true; fi
 if [[ $status == complete ]]; then
   exit 0
 fi
@@ -2265,7 +2265,7 @@ flock -n 8 || exit 0
 exec 9>"$state_dir/chezmoi.lock"
 flock -n 9 || exit 0
 status=
-[[ -r $state_dir/chezmoi.status ]] && IFS= read -r status < "$state_dir/chezmoi.status" || true
+if [[ -r $state_dir/chezmoi.status ]]; then IFS= read -r status < "$state_dir/chezmoi.status" || true; fi
 case $status in complete|failed|running) exit 0 ;; esac
 flock -u 9
 exec 9>&-

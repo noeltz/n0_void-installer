@@ -28,7 +28,9 @@ from KEYMAP without a separate setting; open first-login setup in kitty.
 - Increment 2 pushed as `9bb6160`. Increment 3 adds a Wayfire autostart launcher for kitty, checks the shared setup lock/state before launch, and holds a separate GUI lock while output remains visible.
 - Increment 3 verification: PTY GUI helper, shared console/GUI locking, completion/failure/interruption gating, no duplicate terminals, skipped empty/install modes, autostart preservation and final hook/config checks pass. An expanded validator fixture initially rewrote a literal command comparison as a target path; the fixture adaptation was corrected and rerun.
 - Increment 3 pushed as `20e727d`; all three implementation increments are delivered on `origin/main`.
-- Current next action: fresh VM acceptance T-30–T-33. No automated check or implementation failure remains.
+- Remote CI failed at ShellCheck: Ubuntu uses 0.9.0, which flags omitted optional arguments and the helper status-read shorthand. Explicit production paths and conditional reads fix the warnings without changing behavior. The first compatibility patch fixed installer lint; testing the extracted scripts then exposed the status-read warning, now fixed.
+- Both ShellCheck 0.9.0 and 0.11.0 pass for the installer and all three embedded scripts. Affected boot/desktop/greetd/resume/chezmoi/graphical regressions pass.
+- Current next action: push the final CI compatibility fix, verify remote CI, then fresh VM acceptance T-30–T-33.
 - VM acceptance: T-30–T-33 pending; this workspace has no VM runner. Use a fresh install for desktop/greetd/first-login acceptance. Resume still requires the exact initiating version.
 
 Implementation is split into seven independently reviewed releases. A later
