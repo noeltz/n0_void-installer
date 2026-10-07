@@ -28,6 +28,15 @@ decisions as each increment is released:
   chezmoi setup, an optional target NetworkManager Wi-Fi profile, and explicit
   resume/repair modes. Acceptance criteria are tracked in the progress ledger
   and added here as those increments are implemented.
+- The 1.3.5 logging/state increment writes command output for non-interactive
+  installer steps to a mode-0600 file in `/tmp`, then copies it to the target
+  `/var/log/void-installer/` when the target root is mounted. Dialog and
+  arbitrary chezmoi output are excluded. Config diagnostics must not print
+  supplied values. The versioned state stores non-secret settings and device
+  UUIDs only; password values and hashes are never stored.
+- Before success, the installer verifies fstab UUID/mountpoint entries,
+  matching kernel/initramfs files, GRUB configuration and EFI executable,
+  required runit links, and sudo syntax.
 
 ---
 
@@ -52,7 +61,7 @@ The result is a **base system plus one user account**. No desktop environment, c
 - LUKS / any encryption
 - Manual or dual-boot partitioning (the target disk is always wiped completely)
 - Limine or any bootloader other than GRUB
-- Dry-run mode, log files
+- Dry-run mode
 - Proprietary NVIDIA driver
 - Private dotfiles repositories (needs credentials)
 - Booting snapshots with a writable overlay (read-only snapshot boot only, see 12.3)
@@ -80,7 +89,7 @@ The result is a **base system plus one user account**. No desktop environment, c
 | Snapshots | snapper config `root` for `/`, created around each xbps transaction by wrapper scripts, last 10 pairs kept |
 | Dotfiles | chezmoi `init --apply` from a GitHub repo, run as the new user inside the chroot |
 | UI | `dialog` for disk selection and value prompts; plain single-key `y` for final confirmation |
-| Logging / dry-run | None |
+| Logging / dry-run | Sanitized log in `/tmp` and target `/var/log/void-installer`; no dry-run |
 | Tests | QEMU/KVM with OVMF first, then a physical laptop |
 
 ---
@@ -101,7 +110,7 @@ The installer MUST be a single file so it can be fetched on the live ISO with on
 - Shebang `#!/bin/bash`, first executable lines: `set -Eeuo pipefail`.
 - All logic in functions; the last line of the file is `main "$@"`.
 - Function names (fixed, so the call graph is predictable): `main`, `parse_args`, `load_config`, `preflight`, `detect_hardware`, `build_package_lists`, `probe_packages`, `choose_disk`, `prompt_missing`, `validate_all`, `confirm`, `partition_disk`, `format_disk`, `mount_layout`, `bootstrap_system`, `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user`, `apply_chezmoi`, `install_wrappers`, `initial_snapshot`, `finalize`, `cleanup`.
-- Progress output: one line per step, format `==> [N/16] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Command output of tools is not suppressed. There is **no log file**.
+- Progress output: one line per step, format `==> [N/17] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Non-interactive step output is shown and saved to the sanitized log. Dialog and arbitrary chezmoi output are excluded.
 - Quote every variable expansion. Use `[[ ]]` for tests. ShellCheck MUST pass with no warnings (disable directives only with a comment explaining why). The embedded heredocs (wrapper, config snippets) are invisible to ShellCheck: CI MUST extract script-type heredocs to temporary files and run ShellCheck on them separately.
 - **ERR-trap discipline (binding).** Under `set -Eeuo pipefail`, expected failures would trigger the ERR trap and be reported as exit 1. Every command whose failure is an expected path MUST be guarded and mapped to its specified exit code:
   ```bash
@@ -404,7 +413,7 @@ UUIDs from `blkid -s UUID -o value "$(part 2)"` and `"$(part 1)"`.
 
 ## 10. Installation sequence
 
-Pre-step state: preflight passed, live tools installed, config loaded, values validated. Steps are numbered for the progress output (`==> [N/16]`). **Steps 1–7 never modify any disk.** The destructive part starts at step 9.
+Pre-step state: preflight passed, live tools installed, config loaded, values validated. Steps are numbered for the progress output (`==> [N/17]`). **Steps 1–7 never modify any disk.** The destructive part starts at step 9.
 
 Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and `trap 'on_error $LINENO' ERR`):
 - `on_error` prints `Installation failed at step N (<name>), line L.` to stderr and exits 1.
@@ -944,7 +953,7 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
   -drive file=void-test.qcow2,if=virtio \
   -cdrom void-live-x86_64-*.iso -boot d \
   -nic user,model=virtio-net-pci -device virtio-vga \
-  -serial stdio   # capture console output; the installer itself writes no log
+  -serial stdio   # capture console output alongside the installer log
 ```
 
 `-machine q35` is recommended for a more laptop-like platform.

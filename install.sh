@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.4"
+INSTALLER_VERSION="1.3.5"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -23,6 +23,9 @@ VALIDATE_REASON=""
 CONFIG_SET=" "               # " KEY1 KEY2 ... " — keys that came from the config file
 declare -a INSTALL_MOUNTS=()
 INSTALLER_SUDOERS_CREATED=0
+INSTALLER_LOG=""
+INSTALL_STATE=""
+INSTALL_STATE_STEP=0
 
 declare -A PKG_SEEN=()
 PKGS_ALL=()
@@ -81,18 +84,19 @@ parse_args() {
 # The config is parsed, never sourced: sourcing would execute arbitrary code
 # and expand $ inside values (destroying e.g. a '$6$...' password hash).
 load_config() {
-  local file=$1 line key val
+  local file=$1 line key val line_number=0
   if [[ ! -f $file || ! -r $file ]]; then
     echo "Cannot read config file: $file" >&2
     exit 2
   fi
   while IFS= read -r line || [[ -n $line ]]; do
+    line_number=$((line_number + 1))
     line=${line%$'\r'}
     if [[ -z $line || $line == \#* ]]; then
       continue
     fi
     if ! [[ $line =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]]; then
-      echo "Invalid config line: $line" >&2
+      echo "Invalid config syntax in $file at line $line_number." >&2
       exit 2
     fi
     key=${BASH_REMATCH[1]}
@@ -104,7 +108,7 @@ load_config() {
       HW_TOUCH|HW_FINGERPRINT|HW_BLUETOOTH)
         ;;
       *)
-        echo "Invalid config line: $line" >&2
+        echo "Unsupported config key $key in $file at line $line_number." >&2
         exit 2
         ;;
     esac
@@ -233,7 +237,7 @@ validate_one() {
       ;;
     CHEZMOI_REPO)
       if [[ -n $val ]]; then
-        if ! [[ $val =~ ^https://[^[:space:]]+$ || $val =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+        if ! [[ $val =~ ^https://[^/@?#[:space:]]+$ || $val =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
           VALIDATE_REASON="must be an https:// URL or a GitHub user/repo (or empty to skip)"
           return 1
         fi
@@ -1109,6 +1113,52 @@ mount_layout() {
   mount_owned /mnt/boot/efi -o umask=0077 "$(part 1)" /mnt/boot/efi
 }
 
+write_install_state() {
+  local tmp key
+  [[ -n $INSTALL_STATE ]] || return 0
+  tmp=$(mktemp "${INSTALL_STATE}.tmp.XXXXXX")
+  {
+    printf 'FORMAT=1\nVERSION=%s\nROOT_UUID=%s\nESP_UUID=%s\nTARGET_DISK=%s\nLAST_COMPLETED_STEP=%s\n' \
+      "$INSTALLER_VERSION" "$ROOT_UUID" "$ESP_UUID" "$TARGET_DISK" "$INSTALL_STATE_STEP"
+    for key in HOSTNAME USERNAME USER_SHELL TIMEZONE LOCALE KEYMAP MIRROR SWAP \
+               CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
+      printf '%s=%s\n' "$key" "${!key-}"
+    done
+  } > "$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$INSTALL_STATE"
+}
+
+initialize_install_state() {
+  local state_dir=/mnt/var/lib/void-installer
+  mkdir -p "$state_dir"
+  chmod 0700 "$state_dir"
+  INSTALL_STATE="$state_dir/state"
+  if [[ -e $INSTALL_STATE || -L $INSTALL_STATE ]]; then
+    echo "Installer state path already exists; refusing to overwrite it." >&2
+    return 1
+  fi
+  INSTALL_STATE_STEP=10
+  write_install_state
+}
+
+preserve_install_log() {
+  local entry target expected_source expected_fstype identity source fstype log_dir
+  [[ -n $INSTALLER_LOG && -f $INSTALLER_LOG ]] || return 0
+  for entry in "${INSTALL_MOUNTS[@]}"; do
+    IFS='|' read -r target expected_source expected_fstype <<< "$entry"
+    [[ $target == /mnt ]] || continue
+    identity=$(findmnt -rn -o TARGET,SOURCE,FSTYPE | awk -v target="$target" '$1 == target { print $2 "|" $3; found=1; exit } END { if (!found) exit 1 }' || true)
+    IFS='|' read -r source fstype <<< "$identity"
+    [[ $source == "$expected_source" && $fstype == "$expected_fstype" ]] || return 0
+    log_dir=/mnt/var/log/void-installer
+    mkdir -p "$log_dir"
+    chmod 0700 "$log_dir"
+    install -m 0600 "$INSTALLER_LOG" "$log_dir/${INSTALLER_LOG##*/}"
+    return 0
+  done
+}
+
 # --------------------------------------------------------------------------
 # Bootstrap (spec sections 10.5, 10.6)
 # --------------------------------------------------------------------------
@@ -1453,6 +1503,11 @@ finalize() {
     INSTALLER_SUDOERS_CREATED=0
   fi
   rm -f /mnt/etc/resolv.conf                # NetworkManager manages it at boot
+  if [[ -n $INSTALL_STATE ]]; then
+    INSTALL_STATE_STEP=17
+    write_install_state
+  fi
+  preserve_install_log
   unmount_owned
   if (( ${#INSTALL_MOUNTS[@]} > 0 )); then
     echo "Some installer-owned mounts remain; see the log before rebooting." >&2
@@ -1473,6 +1528,7 @@ finalize() {
 }
 
 cleanup() {
+  preserve_install_log || true
   if (( INSTALLER_SUDOERS_CREATED == 1 )) && [[ -d /mnt/etc/sudoers.d ]]; then
     rm -f /mnt/etc/sudoers.d/99-installer 2>/dev/null || true
   fi
@@ -1491,9 +1547,16 @@ on_error() {
 run_step() {  # $1 = N, $2 = name, rest = function
   CURRENT_STEP_N=$1
   CURRENT_STEP_NAME=$2
-  echo "==> [$1/16] $2"
+  printf '==> [%s/17] %s\n' "$1" "$2" | tee -a "$INSTALLER_LOG"
   shift 2
-  "$@"
+  case $CURRENT_STEP_N in
+    5|8|14) "$@" ;;  # keep dialogs and arbitrary dotfile output outside the log
+    *) "$@" > >(tee -a "$INSTALLER_LOG") 2> >(tee -a "$INSTALLER_LOG" >&2) ;;
+  esac
+  if [[ -n $INSTALL_STATE && -f $INSTALL_STATE && $INSTALL_STATE_STEP -lt $CURRENT_STEP_N ]]; then
+    INSTALL_STATE_STEP=$CURRENT_STEP_N
+    write_install_state
+  fi
 }
 
 load_settings() {
@@ -1511,6 +1574,56 @@ step_interactive() {
 step_filesystems() {
   format_disk
   mount_layout
+  initialize_install_state
+}
+
+validate_target_installation() {
+  local mountpoint expected_uuid kernel kernel_version found_kernel=0 found_efi=0 svc
+  for mountpoint in / /home /.snapshots /var/log /var/cache/xbps /var/tmp; do
+    expected_uuid=$ROOT_UUID
+    if ! awk -v uuid="UUID=$expected_uuid" -v mountpoint="$mountpoint" '$1 == uuid && $2 == mountpoint { found=1 } END { exit !found }' /mnt/etc/fstab; then
+      echo "Installed fstab is missing the expected Btrfs mount for $mountpoint." >&2
+      return 1
+    fi
+  done
+  if ! awk -v uuid="UUID=$ESP_UUID" '$1 == uuid && $2 == "/boot/efi" { found=1 } END { exit !found }' /mnt/etc/fstab; then
+    echo "Installed fstab is missing the EFI partition entry." >&2
+    return 1
+  fi
+  for kernel in /mnt/boot/vmlinuz-*; do
+    [[ -s $kernel ]] || continue
+    kernel_version=${kernel##*/vmlinuz-}
+    if [[ -s /mnt/boot/initramfs-$kernel_version.img ]]; then
+      found_kernel=1
+      break
+    fi
+  done
+  if (( found_kernel == 0 )); then
+    echo "No installed kernel has a matching initramfs in /boot." >&2
+    return 1
+  fi
+  if [[ ! -s /mnt/boot/grub/grub.cfg ]]; then
+    echo "GRUB configuration is missing or empty." >&2
+    return 1
+  fi
+  if [[ -d /mnt/boot/efi/EFI ]]; then
+    while IFS= read -r -d '' _; do found_efi=1; break; done < <(find /mnt/boot/efi/EFI -mindepth 2 -maxdepth 2 -type f -iname grubx64.efi -print0)
+  fi
+  if (( found_efi == 0 )); then
+    echo "GRUB EFI executable is missing from the EFI partition." >&2
+    return 1
+  fi
+  for svc in "${SV_FATAL[@]}"; do
+    if [[ ! -L /mnt/etc/runit/runsvdir/default/$svc || ! -d /mnt/etc/sv/$svc ]]; then
+      echo "Required runit service $svc is not enabled in the installed system." >&2
+      return 1
+    fi
+  done
+  if ! chroot /mnt visudo -c; then
+    echo "Installed sudo configuration failed validation." >&2
+    return 1
+  fi
+  echo "Installed fstab, kernel/initramfs, GRUB, required services, and sudo configuration validated."
 }
 
 bootstrap_prepare() { bootstrap_system prepare; }
@@ -1535,6 +1648,10 @@ main() {
 
   echo "void-installer $INSTALLER_VERSION"
   parse_args "$@"
+  INSTALLER_LOG=$(mktemp /tmp/void-installer.XXXXXX)
+  chmod 0600 "$INSTALLER_LOG"
+  printf 'void-installer %s\n' "$INSTALLER_VERSION" > "$INSTALLER_LOG"
+  printf 'Installer output log: %s\n' "$INSTALLER_LOG" | tee -a "$INSTALLER_LOG"
 
   run_step  1 "Parse arguments and load configuration" load_settings
   run_step  2 "Preflight checks" preflight
@@ -1551,7 +1668,8 @@ main() {
   run_step 13 "Configure system" step_configure
   run_step 14 "Apply chezmoi dotfiles" apply_chezmoi
   run_step 15 "Install xbps wrappers and initial snapshot" step_wrappers
-  run_step 16 "Finalize" finalize
+  run_step 16 "Validate installed system" validate_target_installation
+  run_step 17 "Finalize" finalize
 }
 
 main "$@"

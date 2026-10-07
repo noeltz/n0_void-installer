@@ -8,7 +8,7 @@ continue from the last completed checkpoint.
 | Increment | Release | Status | Verification / next action |
 |---|---:|---|---|
 | 1. Cleanup ownership and disk safety | 1.3.4 | Verified locally; awaiting commit/push | `bash -n`, cleanup regression (owned-mount identity/order and early exits), account regression, signed XBPS bootstrap regression, and `git diff --check` pass. ShellCheck is unavailable locally; CI will run it. |
-| 2. Logs, final checks, checkpoint records | 1.3.5 | Pending | Add sanitized logging and atomic versioned target state; inject failures and inspect for secrets. |
+| 2. Logs, final checks, checkpoint records | 1.3.5 | Verified locally; awaiting commit/push | Syntax, cleanup/state redaction regressions, account regression, help path, and diff checks pass. ShellCheck is unavailable locally; CI will run it. |
 | 3. EFI fallback boot | 1.3.6 | Pending | Verify named-entry and fallback paths, including OVMF boot without an NVRAM entry. |
 | 4. Cached repository probes | 1.3.7 | Pending | Extend signed local XBPS fixture to check one metadata sync and probe outcomes. |
 | 5. First-login chezmoi | 1.3.8 | Pending | Test tty/user gating, retries, concurrency, and the no-passwordless-sudo default. |
@@ -34,4 +34,15 @@ continue from the last completed checkpoint.
   The XBPS regression could not bind its localhost socket in the sandbox; it
   passed when rerun with the required network permission. No implementation
   failure remains.
-- Current next action: commit and push release 1.3.4, then begin increment 2.
+- Commit `3c26b75` pushed to `origin/main` as release 1.3.4.
+- Increment 2 current changes: mode-0600 live and target logs for non-dialog,
+  non-chezmoi steps; config diagnostics omit values; a versioned target state
+  records device UUIDs, non-secret settings, and last completed installer step;
+  a final bootability/service/sudo validation step was added.
+- Increment 2 test notes: the first test script draft had a Python string
+  assembly error, then its harness initially nested the extracted `run_step`
+  function instead of defining it. Both are corrected; cleanup and state
+  regression tests now pass. No product-code failure remains.
+- Increment 2 verification: `bash -n`, cleanup regression, state/log redaction
+  regression, account regression, `--help`, and `git diff --check` pass.
+  ShellCheck is unavailable locally. Next: commit/push 1.3.5, then advance.

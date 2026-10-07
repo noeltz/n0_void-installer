@@ -105,3 +105,10 @@ files. Run it on Void as root or in a user namespace:
 ```sh
 unshare --user --map-root-user python3 tests/account-password-regression.py
 ```
+
+Cleanup and state regression tests run without a Void installation or root:
+
+```sh
+python3 tests/cleanup-regression.py
+python3 tests/installer-state-regression.py
+```
