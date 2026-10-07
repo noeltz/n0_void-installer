@@ -91,3 +91,12 @@ python3 tests/bootstrap-regression.py
 It serves a signed fixture repository on localhost and uses a temporary target
 to reproduce the `-n -S` failure and verify separate synchronization followed
 by a dry-run. It installs no packages and requires no root privileges.
+
+The account regression test reproduces a PAM password update that returns
+success without setting a password, then checks that explicit SHA-512 updates
+write matching hashes for both user and root. It modifies only temporary account
+files. Run it on Void as root or in a user namespace:
+
+```sh
+unshare --user --map-root-user python3 tests/account-password-regression.py
+```

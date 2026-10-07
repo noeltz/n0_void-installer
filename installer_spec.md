@@ -708,12 +708,18 @@ useradd -m -s /bin/bash -G wheel,audio,video,input "$USERNAME"
 
 Password:
 - `USER_PASSWORD_HASH` set: `printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD_HASH" | chroot /mnt chpasswd -e`
-- else: `printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd`
+- else: `printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd -c SHA512`
 - `ROOT_PASSWORD_HASH` set: `printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chroot /mnt chpasswd -e`
-- else: `printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd`
+- else: `printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd -c SHA512`
 
 Passwords MUST NOT be written to any file, `ps`-visible command line, or exported into the chroot environment; they are passed on stdin only.
 After setting passwords, `passwd -S` MUST report status `P` for both accounts or installation fails before reporting success.
+The explicit `-c SHA512` method bypasses the PAM password-update stack and writes
+the password hash directly. This is required because Void's `chpasswd` PAM
+configuration can return success without updating the password. Parse the
+account name and status as whitespace-separated fields; do not require aging
+fields or a trailing space after `P`. On failure, report only the status code,
+never the password or hash.
 
 ### 10.12 (reserved for section 13: chezmoi)
 

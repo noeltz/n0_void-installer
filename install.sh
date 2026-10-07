@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.2"
+INSTALLER_VERSION="1.3.3"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -1234,14 +1234,16 @@ EOF
 }
 
 create_user() {
-  local account_status
+  local account_status status_name status_code _status_details
   chroot /mnt useradd -m -s "$USER_SHELL" -G wheel,audio,video,input "$USERNAME"
   # Passwords are passed on stdin only: never on disk outside /etc/shadow,
   # never in the process list, never in the chroot environment.
   if [[ -v USER_PASSWORD_HASH ]]; then
     printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD_HASH" | chroot /mnt chpasswd -e
   else
-    printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd
+    # An explicit crypt method bypasses PAM: Void's shipped chpasswd PAM
+    # password stack can permit the operation without updating the hash.
+    printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chroot /mnt chpasswd -c SHA512
   fi
 
   # Set an independent root password; root remains available at the console
@@ -1249,18 +1251,20 @@ create_user() {
   if [[ -v ROOT_PASSWORD_HASH ]]; then
     printf 'root:%s\n' "$ROOT_PASSWORD_HASH" | chroot /mnt chpasswd -e
   else
-    printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd
+    printf 'root:%s\n' "$ROOT_PASSWORD" | chroot /mnt chpasswd -c SHA512
   fi
 
   # Catch incomplete account setup before reporting a successful install.
-  account_status=$(chroot /mnt passwd -S "$USERNAME")
-  if [[ $account_status != "$USERNAME P "* ]]; then
-    echo "User account $USERNAME does not have an active password after setup." >&2
+  account_status=$(LC_ALL=C chroot /mnt passwd -S "$USERNAME")
+  read -r status_name status_code _status_details <<< "$account_status"
+  if [[ $status_name != "$USERNAME" || $status_code != P ]]; then
+    echo "User account $USERNAME does not have an active password after setup (status: ${status_code:-unknown})." >&2
     exit 1
   fi
-  account_status=$(chroot /mnt passwd -S root)
-  if [[ $account_status != "root P "* ]]; then
-    echo "Root account does not have an active password after setup." >&2
+  account_status=$(LC_ALL=C chroot /mnt passwd -S root)
+  read -r status_name status_code _status_details <<< "$account_status"
+  if [[ $status_name != root || $status_code != P ]]; then
+    echo "Root account does not have an active password after setup (status: ${status_code:-unknown})." >&2
     exit 1
   fi
 }
