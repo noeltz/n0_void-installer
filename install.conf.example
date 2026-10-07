@@ -54,7 +54,11 @@ ROOT_PASSWORD=change-this-root-password
 # glibc locale. Default: en_US.UTF-8. Must exist in /etc/default/libc-locales.
 #LOCALE=en_US.UTF-8
 
-# Console keymap (validated with loadkeys). Default: us
+# Console and Wayfire keyboard (validated with loadkeys + explicit XKB mapping).
+# Default: us. Examples: uk, de, de-latin1-nodeadkeys, fr, fr-latin9,
+# fr-bepo, br-abnt2, dvorak, dvorak-programmer, es, it, pt, pl2, cz-qwerty.
+# Named .map/.map.gz forms also work. Unknown/custom maps are rejected before
+# disk changes to avoid a silently different desktop layout.
 #KEYMAP=us
 
 # Package mirror base URL; the installer appends /current itself.

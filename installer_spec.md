@@ -71,7 +71,7 @@ Build a **single Bash script** that, when run from the **official Void Linux liv
 - hardware detection with matching drivers/firmware/services
 - everything required to apply chezmoi-managed dotfiles from a remote GitHub repository, including their bootstrap scripts
 
-The result is a **base system plus one user account**. No desktop environment, compositor or login manager is installed by the installer (the dotfiles do that).
+The result is a **base system with a Wayfire desktop and one user account**. Wayfire, wf-shell and kitty provide a usable baseline without dotfiles.
 
 ### 1.1 Explicit non-goals (v1)
 
@@ -129,7 +129,7 @@ The installer MUST be a single file so it can be fetched on the live ISO with on
 - Shebang `#!/bin/bash`, first executable lines: `set -Eeuo pipefail`.
 - All logic in functions; the last line of the file is `main "$@"`.
 - Function names (fixed, so the call graph is predictable): `main`, `parse_args`, `load_config`, `preflight`, `detect_hardware`, `build_package_lists`, `probe_packages`, `choose_disk`, `prompt_missing`, `validate_all`, `confirm`, `partition_disk`, `format_disk`, `mount_layout`, `bootstrap_system`, `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user`, `apply_chezmoi`, `install_wrappers`, `initial_snapshot`, `finalize`, `cleanup`.
-- Progress output: one line per step, format `==> [N/23] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Non-interactive step output is shown and saved to the sanitized log. Dialog and arbitrary chezmoi output are excluded.
+- Progress output: one line per step, format `==> [N/24] <step name>`. Before the first step line the script prints one banner `void-installer <INSTALLER_VERSION>` so a stale script is immediately detectable. Non-interactive step output is shown and saved to the sanitized log. Dialog and arbitrary chezmoi output are excluded.
 - Quote every variable expansion. Use `[[ ]]` for tests. ShellCheck MUST pass with no warnings (disable directives only with a comment explaining why). The embedded heredocs (wrapper, config snippets) are invisible to ShellCheck: CI MUST extract script-type heredocs to temporary files and run ShellCheck on them separately.
 - **ERR-trap discipline (binding).** Under `set -Eeuo pipefail`, expected failures would trigger the ERR trap and be reported as exit 1. Every command whose failure is an expected path MUST be guarded and mapped to its specified exit code:
   ```bash
@@ -230,7 +230,7 @@ Example (all valid): `HOSTNAME=void`, `HOSTNAME="void"`, `USER_PASSWORD_HASH='$6
 | `USER_SHELL` | no | `/bin/bash` | must be `/bin/bash` in v1 | no |
 | `TIMEZONE` | no | `UTC` | file `/usr/share/zoneinfo/$TIMEZONE` exists | yes (menu of available zones) |
 | `LOCALE` | no | `en_US.UTF-8` | line `#$LOCALE UTF-8` or `$LOCALE UTF-8` exists in `/etc/default/libc-locales` of the target (checked after bootstrap; preliminary check against the same file on the live system). The file is generated from glibc's `localedata/SUPPORTED`, so lines carry **trailing whitespace** — matching must tolerate it. The check is case-insensitive and accepts `.utf8` as a spelling of `.UTF-8`; the value is canonicalised to the spelling found in the file (`en_us.utf8` → `en_US.UTF-8`). Only genuinely unavailable locales are rejected | yes (menu of available locales) |
-| `KEYMAP` | no | `us` | `loadkeys --parse "$KEYMAP" >/dev/null 2>&1` succeeds on the live system (parse only, does not change the live keymap) | yes (default prefilled) |
+| `KEYMAP` | no | `us` | `loadkeys --parse "$KEYMAP" >/dev/null 2>&1` succeeds and the named map has an explicit desktop XKB conversion (10.12) | yes (default prefilled) |
 | `MIRROR` | no | `https://repo-default.voidlinux.org` | URL beginning `https://`, **no trailing slash, no `/current`** | no |
 | `SWAP` | no | `zram` | `zram` or `none` | no |
 | `CHEZMOI_REPO` | no | empty = skip dotfiles | `^https://[^ ]+$` or `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$` (GitHub `user/repo`) | yes (empty allowed) |
@@ -343,7 +343,7 @@ The function builds **one array**, `PKGS_ALL` (de-duplicated). xbps resolves eac
 
 **Always (all machines):**
 
-`base-system` `linux` `linux-firmware-network` `btrfs-progs` `grub-x86_64-efi` `grub-btrfs` `grub-btrfs-runit` `efibootmgr` `dosfstools` `snapper` `inotify-tools` `NetworkManager` `dbus` `elogind` `polkit` `chrony` `sudo` `bash-completion` `acpid` `alsa-utils` `void-repo-nonfree`
+`base-system` `linux` `linux-firmware-network` `btrfs-progs` `grub-x86_64-efi` `grub-btrfs` `grub-btrfs-runit` `efibootmgr` `dosfstools` `snapper` `inotify-tools` `NetworkManager` `dbus` `elogind` `polkit` `chrony` `sudo` `bash-completion` `acpid` `alsa-utils` `void-repo-nonfree` `wayfire` `wf-shell` `kitty`
 
 **Chezmoi toolchain (always; see section 13):**
 
@@ -436,7 +436,7 @@ UUIDs from `blkid -s UUID -o value "$(part 2)"` and `"$(part 1)"`.
 
 ## 10. Installation sequence
 
-Pre-step state: preflight passed, live tools installed, config loaded, values validated. Steps are numbered for the progress output (`==> [N/23]`). **Steps 1–7 never modify any disk.** The destructive part starts at step 9.
+Pre-step state: preflight passed, live tools installed, config loaded, values validated. Steps are numbered for the progress output (`==> [N/24]`). **Steps 1–7 never modify any disk.** The destructive part starts at step 9.
 
 Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and `trap 'on_error $LINENO' ERR`):
 - `on_error` prints `Installation failed at step N (<name>), line L.` to stderr and exits 1.
@@ -461,12 +461,13 @@ Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and 
 | 15 | `setup_grub` | 10.9 |
 | 16 | `enable_services` | 10.10 |
 | 17 | `create_user` | 10.11 |
-| 18 | `configure_chezmoi_first_login` | 10.12 |
-| 19 | `apply_chezmoi` | 10.12 |
-| 20 | `install_wrappers` | 10.13 |
-| 21 | `initial_snapshot` | 10.13 |
-| 22 | `validate_target_installation` | 10.14 |
-| 23 | `finalize` | 10.15 |
+| 18 | `configure_desktop` | 10.12 |
+| 19 | `configure_chezmoi_first_login` | Section 13 |
+| 20 | `apply_chezmoi` | Section 13 |
+| 21 | `install_wrappers` | Section 12 |
+| 22 | `initial_snapshot` | 10.13 |
+| 23 | `validate_target_installation` | Section 11 |
+| 24 | `finalize` | 10.14 |
 
 ### 10.1 Step 7 — package probe
 
@@ -782,9 +783,27 @@ account name and status as whitespace-separated fields; do not require aging
 fields or a trailing space after `P`. On failure, report only the status code,
 never the password or hash.
 
-### 10.12 chezmoi setup and application
+### 10.12 Desktop configuration and chezmoi setup
 
-Step 18 installs the first-login hook when requested. Step 19 applies
+Step 18 writes user-owned `~/.config/wayfire.ini` and `wf-shell.ini` only
+when absent, rejecting symlink destinations. It enables wf-shell autostart,
+a panel with kitty launcher and basic window/workspace/logout shortcuts.
+It uses the packaged native Wayfire session unchanged and registers the
+managed user/keymap in `/etc/void-installer/desktop.conf` for repair checks.
+Existing user configuration is preserved on retry.
+
+Derive XKB layout/variant/model from KEYMAP using an explicit table in
+`derive_desktop_keymap`: US, UK, German (including nodeadkeys), Swiss German
+and French, French (including latin9 and Bepo), Brazilian ABNT2, US Dvorak
+(including programmer/left/right), Spanish, Italian, Portuguese, Belgian,
+Danish, Finnish, Norwegian, Swedish, Polish, Czech, Slovak and Hungarian.
+Named `.map` and `.map.gz` suffixes are accepted. Unmapped/custom keymaps
+fail validation before partitioning; no separate XKB setting is exposed.
+The final target check verifies converted layout/variant/model against the
+installed XKB registry, native session, desktop executables and config owners.
+User overrides are allowed. Legacy targets without the marker remain repairable.
+
+Step 19 installs the first-login hook when requested. Step 20 applies
 installation-time chezmoi when `CHEZMOI_MODE=install`; this step is isolated
 because dotfile bootstrap commands may make arbitrary target changes.
 
@@ -865,7 +884,7 @@ install -Dm0755 wrapper /mnt/usr/local/bin/xbps-remove
 
 The script derives its behavior from `${0##*/}`. `/usr/local/bin` precedes `/usr/bin` in Void's default `PATH` and in `sudo`'s `secure_path`; acceptance test T-9 verifies this.
 
-The wrappers are installed in step 20, **after** the chezmoi step and **after** all package installs of the installer, so nothing during installation triggers snapshots.
+The wrappers are installed in step 21, **after** the chezmoi step and **after** all package installs of the installer, so nothing during installation triggers snapshots.
 
 ### 12.2 Wrapper source (binding; embed verbatim)
 
@@ -1071,6 +1090,9 @@ qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 \
 | T-29 | Run `--repair /dev/vda2 --action check`, then password/GRUB/initramfs actions in a disposable VM | check reports target health; requested repair works; partition table and filesystem UUIDs remain unchanged |
 | T-27 | After first boot with network: `getent hosts voidlinux.org` and `cat /etc/resolv.conf` | name resolution works; `/etc/resolv.conf` is written by NetworkManager |
 
+| T-30 | Log in on tty1, start `dbus-run-session -- wayfire` with `KEYMAP=de-latin1-nodeadkeys` | panel/background and kitty launch work; German keyboard agrees with console; window controls and logout work |
+| T-31 | Unattended install with an unsupported/custom KEYMAP | fails before partitioning with a supported-conversion diagnostic |
+
 ### 15.2 Phase 2 — physical laptop
 
 Run only after all Phase 1 tests pass. Same install, then verify:
@@ -1100,7 +1122,7 @@ Listed so they can be changed on purpose. The implementation follows them as wri
 2. **Bash and `dialog`** (not POSIX sh, not whiptail).
 3. **Kernel:** `linux` meta-package, not LTS.
 4. **Root has an independently configured password** for console recovery; the regular user is in `wheel` with `sudo` (not doas).
-5. **Time sync:** `chrony`; **laptop power:** `tlp` + `upower`; **audio:** only `alsa-utils` (+ `sof-firmware` on Intel). No PipeWire/compositor/login manager — expected to come from the dotfiles bootstrap.
+5. **Time sync:** `chrony`; **laptop power:** `tlp` + `upower`; **audio:** only `alsa-utils` (+ `sof-firmware` on Intel). Wayfire, wf-shell and kitty are installed by default; desktop extras remain optional dotfile additions.
 6. **zram:** `zramen`, zstd, 50 % of RAM, capped at 8192 MiB, priority 32767. Suppress informational startup messages on the login console (`ZRAMEN_QUIET=1`); warnings and errors remain visible.
 7. **btrfs options:** `noatime,compress=zstd:1,discard=async`.
 8. **No PAM changes** for fingerprint login; the user enrols manually.

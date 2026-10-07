@@ -14,6 +14,8 @@ def extract(start_marker, end_marker):
 
 
 load_config = extract("load_config() {", "apply_defaults() {")
+defaults = extract("apply_defaults() {", "derive_desktop_keymap() {")
+load_settings = extract("load_settings() {", "step_interactive() {")
 write_state = extract("write_install_state() {", "initialize_install_state() {")
 run_step = extract("run_step() {", "load_settings() {")
 
@@ -27,6 +29,14 @@ with tempfile.TemporaryDirectory(prefix="void-state-regression-") as directory:
     )
     assert "config-secret" not in result.stdout, result.stdout
     assert "line 1" in result.stdout, result.stdout
+
+    config.write_text("USER_PASSWORD='user-secret'\nROOT_PASSWORD='root-secret'\nWIFI_PASSWORD='wifi-secret'\n")
+    result = subprocess.run(
+        ["bash", "-c", "set -eu\nCONFIG_SET=' '\nCONFIG_FILE=$1\n" + load_config + defaults + load_settings
+         + 'load_settings\n[[ $USER_PASSWORD == user-secret && $ROOT_PASSWORD == root-secret && $WIFI_PASSWORD == wifi-secret ]]',
+         "test", str(config)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert result.returncode == 0, result.stderr
 
     state = root / "state"
     harness = """#!/bin/bash
@@ -73,10 +83,10 @@ ROOT_PASSWORD_HASH='$6$root-hash-secret'
 
     log = root / "install.log"
     step_harness = (
-        "#!/bin/bash\nset -eu\nINSTALLER_LOG=$1\nCURRENT_STEP_N=19\n"
+        "#!/bin/bash\nset -eu\nINSTALLER_LOG=$1\nINSTALLER_TOTAL_STEPS=24\nCURRENT_STEP_N=20\n"
         "INSTALL_STATE=\nINSTALL_STATE_STEP=0\n"
         + run_step
-        + "run_step 19 'Apply chezmoi dotfiles' chezmoi-applied printf '%s\\n' dotfile-output-secret\n"
+        + "run_step 20 'Apply chezmoi dotfiles' chezmoi-applied printf '%s\\n' dotfile-output-secret\n"
     )
     subprocess.run(["bash", "-c", step_harness, "test", str(log)], check=True,
                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

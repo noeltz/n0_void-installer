@@ -10,6 +10,8 @@ one whole disk and installs a complete, bootable base system with:
   (last 10 kept) via wrapper scripts in `/usr/local/bin`
 - NetworkManager, chrony, runit services, hardware detection with matching
   drivers/firmware
+- Wayfire, wf-shell and kitty with a panel, terminal launcher and keyboard
+  layout derived from the selected console keymap
 - one sudo-enabled user account and a separate root password for console
   recovery and, optionally,
   chezmoi-managed dotfiles from a public GitHub repository
@@ -24,8 +26,8 @@ temporary isolated cache before disk changes. The installer removes that
 cache after probing and still performs full dependency and disk-space planning
 against the mounted target before package installation.
 
-No desktop environment or login manager is installed — that is expected to
-come from your dotfiles.
+The desktop baseline works without dotfiles. Existing user configuration files
+are preserved if desktop configuration is retried.
 
 ## Requirements
 
@@ -92,6 +94,14 @@ Remove the installation medium and reboot. Log in with the configured user and
 password. That user can use `sudo`; root can also log in on the console with
 the separate root password configured during installation.
 
+Start the desktop from the console with `dbus-run-session -- wayfire`.
+Super+Enter opens kitty, Super+Q closes a window, Alt+Tab switches windows,
+Super+arrow tiles windows, and Super+Escape logs out. The panel also provides
+an application menu, kitty launcher, network status, battery and clock.
+`KEYMAP` controls both console and desktop layouts. Common named console maps
+(including German, French, British, Brazilian and Dvorak) have explicit XKB
+conversions; unknown or custom maps are rejected before disk changes.
+
 When a chezmoi repository is configured, setup runs on the user's first
 interactive tty login by default. If it fails or is interrupted, retry with
 `void-installer-chezmoi --retry`. Set `CHEZMOI_MODE=install` in the installer
@@ -119,6 +129,14 @@ chroot /mnt passwd root
 The installer implements `installer_spec.md` (binding specification).
 ShellCheck must pass cleanly, including on the embedded xbps wrapper
 (extracted and checked separately in CI).
+
+Desktop configuration and checkpoint failure checks run without a VM:
+
+```sh
+python3 tests/desktop-regression.py
+python3 tests/resume-repair-regression.py
+python3 tests/installer-state-regression.py
+```
 
 Run the isolated XBPS bootstrap regression test on a Void system with Python 3
 and OpenSSL available:

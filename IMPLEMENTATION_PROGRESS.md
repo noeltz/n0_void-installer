@@ -1,5 +1,30 @@
 # Installer improvement progress
 
+## Lightweight desktop implementation
+
+Each increment is verified, committed, and pushed before the next begins.
+Resume uses the exact installer version that wrote the checkpoint. VM
+acceptance remains separate from automated checks; failed checks and the next
+recovery action are recorded here.
+
+| Increment | Release | Status | Verification / next action |
+|---|---:|---|---|
+| Wayfire, wf-shell, kitty and synchronized keyboard | 1.3.11 | Verified; ready to push | Desktop/keymap, state, resume failure, bootstrap, account and existing regressions pass; ShellCheck and syntax pass. |
+| Greetd and tuigreet on tty7 | 1.3.12 | Pending | Preserve packaged greeter account and tty1; test TOML, cache, service and session wrapper. |
+| Graphical first-login chezmoi | 1.3.13 | Pending | Test visible kitty setup, shared locking, completion and explicit retry. |
+
+Decisions: install only the five requested packages and their dependencies;
+greetd uses tty7, tty1 remains a recovery console; derive Wayfire XKB settings
+from KEYMAP without a separate setting; open first-login setup in kitty.
+
+- Increment 1 inspection found that fresh config loading cleared passwords;
+  secret clearing was moved to resume; fresh configured secrets are covered by a regression.
+- Increment 1 also fixed resume dispatch suppressing Bash error handling; an injected action failure now stops without advancing its checkpoint.
+- Verification: all nine regression scripts, installer/embedded-helper ShellCheck, syntax, help and diff checks pass. Initial state fixture lacked the new total-step constant; corrected and rerun.
+- Remote packages confirmed: wayfire 0.11.0_1, wf-shell 0.11.0_2, kitty 0.48.2_1, greetd 0.10.3_2, tuigreet 0.11.1_1.
+- Current next action: push increment 1, then implement greetd on tty7.
+- VM acceptance: T-30/T-31 pending; this workspace has no VM runner.
+
 Implementation is split into seven independently reviewed releases. A later
 increment starts only after the current increment's checks pass and its commit
 is pushed. Failures and the next recovery action are recorded here so work can

@@ -1,10 +1,13 @@
 """Exercise checkpoint validation and prove resume/repair avoid disk creation."""
 import pathlib
+import re
 import subprocess
 import tempfile
 
 source = pathlib.Path(__file__).resolve().parents[1] / "install.sh"
 text = source.read_text()
+version = re.search(r'^INSTALLER_VERSION="([^"]+)"', text, re.M)[1]
+total = int(re.search(r'^INSTALLER_TOTAL_STEPS=(\d+)', text, re.M)[1])
 
 
 def extract(start_marker, end_marker):
@@ -18,8 +21,8 @@ resume = extract("run_resume() {", "run_repair() {")
 repair_action = extract("run_repair_action() {", "run_resume() {")
 repair = extract("run_repair() {", "validate_target_installation() {")
 
-valid_state = """FORMAT=1
-VERSION=1.3.10
+valid_state = f"""FORMAT=1
+VERSION={version}
 ROOT_UUID=root-uuid
 ESP_UUID=esp-uuid
 TARGET_DISK=/dev/vda
@@ -55,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="void-resume-regression-") as directory:
         state.write_text(contents)
         state.chmod(int(mode, 8))
         harness = (
-            "#!/bin/bash\nset -eu\nINSTALLER_VERSION=1.3.10\n"
+            f"#!/bin/bash\nset -eu\nINSTALLER_VERSION={version}\nINSTALLER_TOTAL_STEPS={total}\n"
             "INSTALL_STATE_STEP=0\nINSTALL_STATE_CHECKPOINT=none\nINSTALL_STATUS=active\n"
             "stat() { if [[ $1 == -c && $2 == %u ]]; then echo 0; else command stat \"$@\"; fi; }\n"
             + state_reader
@@ -70,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix="void-resume-regression-") as directory:
     assert result.returncode == 0, result.stdout
     assert "LAST_COMPLETED_STEP" not in result.stdout
     for contents, mode, message in (
-        (valid_state.replace("VERSION=1.3.10", "VERSION=1.3.9"), "0600", "format/version"),
+        (valid_state.replace(f"VERSION={version}", "VERSION=0.0.0"), "0600", "format/version"),
         (valid_state.replace("LAST_COMPLETED_STEP=12", "LAST_COMPLETED_STEP=12\nLAST_COMPLETED_STEP=13"), "0600", "Duplicate"),
         (valid_state.replace("packages-installed", "bootloader-configured"), "0600", "do not match"),
         (valid_state, "0644", "permissions"),
@@ -102,6 +105,7 @@ setup_snapper() { :; }
 setup_grub() { :; }
 enable_services() { :; }
 create_user() { :; }
+configure_desktop() { :; }
 configure_chezmoi_first_login() { :; }
 apply_chezmoi() { :; }
 install_wrappers() { :; }
@@ -109,13 +113,34 @@ initial_snapshot() { :; }
 validate_target_installation() { :; }
 finalize() { :; }
 '''
-harness += resume + "run_resume\n"
+harness += resume
+dispatcher = harness
+harness += "run_resume\n"
 result = subprocess.run(["bash"], input=harness, text=True,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 assert result.returncode == 0, result.stderr
 steps = [line.split(":", 1)[0] for line in result.stdout.splitlines()]
-assert steps == [str(n) for n in range(13, 24)], result.stdout
+assert steps == [str(n) for n in range(13, total + 1)], result.stdout
 assert "partition-called" not in result.stderr and "format-called" not in result.stderr
+
+# Exercise the real run_step in resume: a failing action must stop before its
+# next command, and the failed step must never become a successful checkpoint.
+run_step = extract("run_step() {", "load_settings() {")
+with tempfile.TemporaryDirectory(prefix="void-resume-failure-") as directory:
+    state = pathlib.Path(directory) / "checkpoint"
+    state.write_text("17")
+    script = dispatcher + f"\nINSTALLER_TOTAL_STEPS={total}\n" + run_step + r'''
+INSTALL_STATE=$1
+INSTALL_STATE_STEP=17
+write_install_state() { printf '%s' "$INSTALL_STATE_STEP" > "$INSTALL_STATE"; }
+configure_desktop() { false; echo failed-action-continued; }
+run_resume
+'''
+    result = subprocess.run(["bash", "-c", script, "test", str(state)],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert result.returncode != 0, result.stdout
+    assert "failed-action-continued" not in result.stdout, result.stdout
+    assert state.read_text() == "17", state.read_text()
 
 # The repair action dispatcher invokes its requested action only. The mount
 # wrapper itself contains no disk creation operation.

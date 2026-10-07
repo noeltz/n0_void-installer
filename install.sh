@@ -11,7 +11,8 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.10"
+INSTALLER_VERSION="1.3.11"
+INSTALLER_TOTAL_STEPS=24
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -206,6 +207,50 @@ is_config_set() {
 # validate_one KEY VALUE → 0 valid, 1 invalid (reason in VALIDATE_REASON).
 # TARGET_DISK is validated by validate_target_disk; EXTRA_PACKAGES by the
 # package probe.
+derive_desktop_keymap() {  # named console keymap -> XKB layout/variant/model
+  local keymap=$1
+  keymap=${keymap%.gz}
+  keymap=${keymap%.map}
+  XKB_LAYOUT=""
+  XKB_VARIANT=""
+  XKB_MODEL=pc105
+  # These are layout conversions, not filename guesses. Unknown/custom maps
+  # must not silently give the desktop a different keyboard than the console.
+  case $keymap in
+    us) XKB_LAYOUT=us ;;
+    uk) XKB_LAYOUT=gb ;;
+    de|de-latin1) XKB_LAYOUT=de ;;
+    de-latin1-nodeadkeys) XKB_LAYOUT=de; XKB_VARIANT=nodeadkeys ;;
+    de_CH-latin1) XKB_LAYOUT=ch ;;
+    fr_CH-latin1) XKB_LAYOUT=ch; XKB_VARIANT=fr ;;
+    fr|fr-latin0|fr-latin1) XKB_LAYOUT=fr ;;
+    fr-latin9) XKB_LAYOUT=fr; XKB_VARIANT=latin9 ;;
+    fr-bepo|fr-bepo-latin9) XKB_LAYOUT=fr; XKB_VARIANT=bepo ;;
+    br-abnt|br-abnt2|br-latin1-abnt2) XKB_LAYOUT=br; XKB_MODEL=abnt2 ;;
+    dvorak|ANSI-dvorak) XKB_LAYOUT=us; XKB_VARIANT=dvorak ;;
+    dvorak-programmer) XKB_LAYOUT=us; XKB_VARIANT=dvp ;;
+    dvorak-l|dvorak-r) XKB_LAYOUT=us; XKB_VARIANT=$keymap ;;
+    es) XKB_LAYOUT=es ;;
+    it) XKB_LAYOUT=it ;;
+    pt|pt-latin1) XKB_LAYOUT=pt ;;
+    be-latin1) XKB_LAYOUT=be ;;
+    dk|dk-latin1) XKB_LAYOUT=dk ;;
+    'fi'|fi-latin1) XKB_LAYOUT='fi' ;;
+    no|no-latin1) XKB_LAYOUT=no ;;
+    sv-latin1) XKB_LAYOUT=se ;;
+    pl2) XKB_LAYOUT=pl ;;
+    cz|cz-qwertz) XKB_LAYOUT=cz ;;
+    cz-qwerty) XKB_LAYOUT=cz; XKB_VARIANT=qwerty ;;
+    sk-qwertz) XKB_LAYOUT=sk ;;
+    sk-qwerty) XKB_LAYOUT=sk; XKB_VARIANT=qwerty ;;
+    hu) XKB_LAYOUT=hu ;;
+    *)
+      VALIDATE_REASON="has no supported Wayfire/XKB conversion; choose a named map such as us, uk, de, de-latin1-nodeadkeys, fr, fr-latin9, br-abnt2, or dvorak"
+      return 1
+      ;;
+  esac
+}
+
 validate_one() {
   local key=$1 val=$2
   local esc=$val
@@ -279,6 +324,7 @@ validate_one() {
         VALIDATE_REASON="not a valid console keymap"
         return 1
       fi
+      derive_desktop_keymap "$val" || return 1
       ;;
     MIRROR)
       if ! [[ $val =~ ^https://[^/]+(/[^/]+)*$ ]] || [[ $val == */current ]]; then
@@ -786,7 +832,7 @@ build_package_lists() {
   for p in base-system linux linux-firmware-network btrfs-progs grub-x86_64-efi \
            grub-btrfs grub-btrfs-runit efibootmgr dosfstools snapper inotify-tools \
            NetworkManager dbus elogind polkit chrony sudo bash-completion acpid \
-           alsa-utils void-repo-nonfree \
+           alsa-utils void-repo-nonfree wayfire wf-shell kitty \
            chezmoi git curl wget openssh gnupg age unzip xz tar rsync python3 \
            base-devel nano; do
     pkg_add "$p"
@@ -1386,13 +1432,15 @@ read_install_state() {
               WIFI_HIDDEN CHEZMOI_REPO EXTRA_PACKAGES HW_CHASSIS HW_TOUCH HW_FINGERPRINT HW_BLUETOOTH; do
     [[ ${seen[$key]+yes} ]] || { echo "Installer state is missing required key $key." >&2; return 1; }
   done
+  # VERSION is assigned by the validated state-key reader above.
+  # shellcheck disable=SC2153
   [[ $FORMAT == 1 && $VERSION == "$INSTALLER_VERSION" ]] || { echo "Installer state format/version does not match this installer." >&2; return 1; }
-  [[ $LAST_COMPLETED_STEP =~ ^[0-9]+$ ]] && (( LAST_COMPLETED_STEP >= 10 && LAST_COMPLETED_STEP <= 22 )) || {
+  if [[ ! $LAST_COMPLETED_STEP =~ ^[0-9]+$ ]] || (( LAST_COMPLETED_STEP < 10 || LAST_COMPLETED_STEP >= INSTALLER_TOTAL_STEPS )); then
     echo "Installer state checkpoint is invalid or already complete." >&2; return 1;
-  }
+  fi
   [[ $INSTALL_STATUS == active ]] || { echo "Installer state is not marked active." >&2; return 1; }
   case "$LAST_COMPLETED_STEP:$LAST_COMPLETED_CHECKPOINT" in
-    10:filesystems-mounted|11:bootstrap-prepared|12:packages-installed|13:system-configured|14:snapper-configured|15:bootloader-configured|16:services-enabled|17:accounts-configured|18:chezmoi-hook-configured|19:chezmoi-applied|20:wrappers-installed|21:initial-snapshot|22:validated) ;;
+    10:filesystems-mounted|11:bootstrap-prepared|12:packages-installed|13:system-configured|14:snapper-configured|15:bootloader-configured|16:services-enabled|17:accounts-configured|18:desktop-configured|19:chezmoi-hook-configured|20:chezmoi-applied|21:wrappers-installed|22:initial-snapshot|23:validated) ;;
     *) echo "Installer checkpoint number and name do not match." >&2; return 1 ;;
   esac
   [[ $ROOT_UUID =~ ^[[:alnum:]-]+$ && $ESP_UUID =~ ^[[:alnum:]-]+$ ]] || { echo "Invalid device UUID in installer state." >&2; return 1; }
@@ -1811,6 +1859,154 @@ create_user() {
   fi
 }
 
+write_desktop_user_file() {  # $1 = target root, $2 = path inside target; stdin = contents
+  local target=$1 path=$2 tmp
+  if [[ -L $target$path || ( -e $target$path && ! -f $target$path ) ]]; then
+    echo "Unsafe desktop configuration destination: $path" >&2
+    return 1
+  fi
+  if [[ -f $target$path ]]; then
+    cat >/dev/null
+    return 0
+  fi
+  tmp=$(mktemp "$target$path.tmp.XXXXXX")
+  cat > "$tmp"
+  chmod 0644 "$tmp"
+  chroot "$target" chown "$USERNAME:$USERNAME" "${tmp#"$target"}"
+  mv -f "$tmp" "$target$path"
+}
+
+configure_desktop() {  # optional target root for regression fixtures
+  local target=${1:-/mnt} config path
+  config="$target/home/$USERNAME/.config"
+  derive_desktop_keymap "$KEYMAP"
+  for path in "$target/home/$USERNAME" "$config" "$target/etc/void-installer"; do
+    if [[ -L $path || ( -e $path && ! -d $path ) ]]; then
+      echo "Unsafe desktop configuration directory." >&2
+      return 1
+    fi
+  done
+  mkdir -p "$config" "$target/etc/void-installer"
+  chroot "$target" chown "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
+  write_desktop_user_file "$target" "/home/$USERNAME/.config/wayfire.ini" <<DESKTOP_EOF
+# void-installer Wayfire baseline; user dotfiles may replace this file.
+[core]
+plugins = autostart command decoration foreign-toplevel grid gtk-shell move place resize switcher vswitch wayfire-shell wm-actions
+close_top_view = <super> KEY_Q | <alt> KEY_F4
+vwidth = 3
+vheight = 1
+
+[input]
+xkb_layout = $XKB_LAYOUT
+xkb_variant = $XKB_VARIANT
+xkb_model = $XKB_MODEL
+
+[autostart]
+autostart_wf_shell = true
+0_env = dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+
+[command]
+binding_terminal = <super> KEY_ENTER
+command_terminal = kitty
+binding_logout = <super> KEY_ESC
+command_logout = wayland-logout
+
+[move]
+activate = <super> BTN_LEFT
+
+[resize]
+activate = <super> BTN_RIGHT
+
+[switcher]
+next_view = <alt> KEY_TAB
+prev_view = <alt> <shift> KEY_TAB
+
+[grid]
+slot_l = <super> KEY_LEFT
+slot_r = <super> KEY_RIGHT
+slot_t = <super> KEY_UP
+restore = <super> KEY_DOWN
+
+[vswitch]
+binding_left = <ctrl> <super> KEY_LEFT
+binding_right = <ctrl> <super> KEY_RIGHT
+with_win_left = <ctrl> <super> <shift> KEY_LEFT
+with_win_right = <ctrl> <super> <shift> KEY_RIGHT
+
+[wayfire-shell]
+toggle_menu = <super>
+DESKTOP_EOF
+  write_desktop_user_file "$target" "/home/$USERNAME/.config/wf-shell.ini" <<'SHELL_CONFIG_EOF'
+[panel]
+widgets_left = menu spacing4 launchers window-list
+widgets_center = none
+widgets_right = tray network battery clock
+position = top
+autohide = false
+minimal_height = 28
+launcher_terminal = kitty.desktop
+menu_logout_command = wayland-logout
+clock_format = %a %H:%M
+
+[background]
+fill_mode = fill_and_crop
+SHELL_CONFIG_EOF
+  local marker="$target/etc/void-installer/desktop.conf"
+  [[ ! -L $marker && ( ! -e $marker || -f $marker ) ]] || {
+    echo "Unsafe desktop installation marker." >&2; return 1;
+  }
+  printf 'USERNAME=%s\nKEYMAP=%s\n' "$USERNAME" "$KEYMAP" > "$marker"
+  chmod 0644 "$marker"
+  echo "Configured Wayfire and wf-shell; desktop keyboard: $XKB_LAYOUT ${XKB_VARIANT:-default}."
+}
+
+validate_desktop_installation() {
+  local target=${1:-/mnt} key value desktop_user="" desktop_keymap="" program
+  local marker="$target/etc/void-installer/desktop.conf"
+  [[ ! -L $marker && ( ! -e $marker || -f $marker ) ]] || {
+    echo "Unsafe desktop installation marker." >&2; return 1;
+  }
+  [[ -f $marker ]] || return 0
+  while IFS='=' read -r key value; do
+    case $key in USERNAME) desktop_user=$value ;; KEYMAP) desktop_keymap=$value ;; esac
+  done < "$marker"
+  [[ $desktop_user =~ ^[a-z_][a-z0-9_-]{0,31}$ && $desktop_user != root ]] || {
+    echo "Invalid desktop installation user." >&2; return 1;
+  }
+  derive_desktop_keymap "$desktop_keymap"
+  for program in wayfire wf-panel wf-background wayland-logout kitty dbus-run-session; do
+    [[ -x $target/usr/bin/$program ]] || { echo "Desktop executable $program is missing." >&2; return 1; }
+  done
+  chroot "$target" python3 - "$desktop_user" "$XKB_LAYOUT" "$XKB_VARIANT" "$XKB_MODEL" <<'DESKTOP_CHECK_EOF'
+import configparser
+import os
+import pwd
+import sys
+import xml.etree.ElementTree as ET
+
+user, layout, variant, model = sys.argv[1:]
+rules = ET.parse("/usr/share/X11/xkb/rules/evdev.xml").getroot()
+layouts = {item.findtext("configItem/name"): item for item in rules.findall("layoutList/layout")}
+if layout not in layouts or (variant and variant not in {
+        item.findtext("configItem/name") for item in layouts[layout].findall("variantList/variant")}):
+    sys.exit("Derived desktop layout/variant is unavailable in the installed XKB rules.")
+if model not in {item.findtext("configItem/name") for item in rules.findall("modelList/model")}:
+    sys.exit("Derived desktop keyboard model is unavailable in the installed XKB rules.")
+session = configparser.ConfigParser(interpolation=None)
+session.read("/usr/share/wayland-sessions/wayfire.desktop")
+if session.get("Desktop Entry", "Exec", fallback="") != "wayfire":
+    sys.exit("Wayfire's native desktop session is missing or invalid.")
+uid = pwd.getpwnam(user).pw_uid
+for name in ("wayfire.ini", "wf-shell.ini"):
+    path = f"/home/{user}/.config/{name}"
+    if os.path.islink(path) or not os.path.isfile(path) or os.stat(path).st_uid != uid:
+        sys.exit("Desktop configuration is missing, symlinked, or not owned by its user.")
+    config = configparser.ConfigParser(interpolation=None, strict=False)
+    with open(path) as file:
+        config.read_file(file)
+DESKTOP_CHECK_EOF
+}
+
 configure_chezmoi_first_login() {
   local target=${1:-/mnt}
   local config=$target/etc/void-installer/chezmoi.conf
@@ -2030,7 +2226,7 @@ finalize() {
   fi
   rm -f /mnt/etc/resolv.conf                # NetworkManager manages it at boot
   if [[ -n $INSTALL_STATE ]]; then
-    INSTALL_STATE_STEP=23
+    INSTALL_STATE_STEP=$INSTALLER_TOTAL_STEPS
     INSTALL_STATE_CHECKPOINT="complete"
     INSTALL_STATUS="complete"
     write_install_state
@@ -2076,11 +2272,11 @@ on_error() {
 run_step() {  # $1 = N, $2 = name, $3 = checkpoint, rest = function
   CURRENT_STEP_N=$1
   CURRENT_STEP_NAME=$2
-  printf '==> [%s/23] %s\n' "$1" "$2" | tee -a "$INSTALLER_LOG"
+  printf '==> [%s/%s] %s\n' "$1" "$INSTALLER_TOTAL_STEPS" "$2" | tee -a "$INSTALLER_LOG"
   local checkpoint=$3
   shift 3
   case $CURRENT_STEP_N in
-    5|8|19) "$@" ;;  # keep dialogs and arbitrary dotfile output outside the log
+    5|8|20) "$@" ;;  # keep dialogs and arbitrary dotfile output outside the log
     *) "$@" > >(tee -a "$INSTALLER_LOG") 2> >(tee -a "$INSTALLER_LOG" >&2) ;;
   esac
   if [[ -n $INSTALL_STATE && -f $INSTALL_STATE && $INSTALL_STATE_STEP -lt $CURRENT_STEP_N ]]; then
@@ -2096,7 +2292,6 @@ load_settings() {
     load_config "$CONFIG_FILE"
   fi
   apply_defaults
-  unset USER_PASSWORD USER_PASSWORD_HASH ROOT_PASSWORD ROOT_PASSWORD_HASH WIFI_PASSWORD
 }
 
 step_interactive() {
@@ -2156,8 +2351,9 @@ load_resume_state() {
     return 1
   fi
   apply_defaults
-  [[ $CHEZMOI_MODE != install || $INSTALL_STATE_STEP != 18 ]] || {
-    echo "Install-time chezmoi was interrupted after checkpoint 18; it can run arbitrary dotfile scripts. Resume is stopped. Use --repair ROOT_PARTITION --action chroot, then inspect and repair manually." >&2
+  unset USER_PASSWORD USER_PASSWORD_HASH ROOT_PASSWORD ROOT_PASSWORD_HASH WIFI_PASSWORD
+  [[ $CHEZMOI_MODE != install || $INSTALL_STATE_STEP != 19 ]] || {
+    echo "Install-time chezmoi was interrupted after checkpoint 19; it can run arbitrary dotfile scripts. Resume is stopped. Use --repair ROOT_PARTITION --action chroot, then inspect and repair manually." >&2
     return 1
   }
   local key
@@ -2233,19 +2429,20 @@ run_resume() {
   build_package_lists
   probe_packages
   if (( INSTALL_STATE_STEP == 11 )); then step_repair_partial_packages; fi
-  (( INSTALL_STATE_STEP < 11 )) && run_step 11 "Prepare target for bootstrap" bootstrap-prepared bootstrap_prepare
-  (( INSTALL_STATE_STEP < 12 )) && run_step 12 "Install packages" packages-installed bootstrap_install
-  (( INSTALL_STATE_STEP < 13 )) && run_step 13 "Configure base system" system-configured configure_system
-  (( INSTALL_STATE_STEP < 14 )) && run_step 14 "Configure Snapper" snapper-configured setup_snapper
-  (( INSTALL_STATE_STEP < 15 )) && run_step 15 "Install GRUB" bootloader-configured setup_grub
-  (( INSTALL_STATE_STEP < 16 )) && run_step 16 "Enable services" services-enabled enable_services
-  (( INSTALL_STATE_STEP < 17 )) && run_step 17 "Configure accounts" accounts-configured create_user
-  (( INSTALL_STATE_STEP < 18 )) && run_step 18 "Configure first-login dotfiles" chezmoi-hook-configured configure_chezmoi_first_login
-  (( INSTALL_STATE_STEP < 19 )) && run_step 19 "Apply chezmoi dotfiles" chezmoi-applied apply_chezmoi
-  (( INSTALL_STATE_STEP < 20 )) && run_step 20 "Install xbps wrappers" wrappers-installed install_wrappers
-  (( INSTALL_STATE_STEP < 21 )) && run_step 21 "Create initial snapshot" initial-snapshot initial_snapshot
-  (( INSTALL_STATE_STEP < 22 )) && run_step 22 "Validate installed system" validated validate_target_installation
-  run_step 23 "Finalize" complete finalize
+  if (( INSTALL_STATE_STEP < 11 )); then run_step 11 "Prepare target for bootstrap" bootstrap-prepared bootstrap_prepare; fi
+  if (( INSTALL_STATE_STEP < 12 )); then run_step 12 "Install packages" packages-installed bootstrap_install; fi
+  if (( INSTALL_STATE_STEP < 13 )); then run_step 13 "Configure base system" system-configured configure_system; fi
+  if (( INSTALL_STATE_STEP < 14 )); then run_step 14 "Configure Snapper" snapper-configured setup_snapper; fi
+  if (( INSTALL_STATE_STEP < 15 )); then run_step 15 "Install GRUB" bootloader-configured setup_grub; fi
+  if (( INSTALL_STATE_STEP < 16 )); then run_step 16 "Enable services" services-enabled enable_services; fi
+  if (( INSTALL_STATE_STEP < 17 )); then run_step 17 "Configure accounts" accounts-configured create_user; fi
+  if (( INSTALL_STATE_STEP < 18 )); then run_step 18 "Configure desktop" desktop-configured configure_desktop; fi
+  if (( INSTALL_STATE_STEP < 19 )); then run_step 19 "Configure first-login dotfiles" chezmoi-hook-configured configure_chezmoi_first_login; fi
+  if (( INSTALL_STATE_STEP < 20 )); then run_step 20 "Apply chezmoi dotfiles" chezmoi-applied apply_chezmoi; fi
+  if (( INSTALL_STATE_STEP < 21 )); then run_step 21 "Install xbps wrappers" wrappers-installed install_wrappers; fi
+  if (( INSTALL_STATE_STEP < 22 )); then run_step 22 "Create initial snapshot" initial-snapshot initial_snapshot; fi
+  if (( INSTALL_STATE_STEP < 23 )); then run_step 23 "Validate installed system" validated validate_target_installation; fi
+  run_step 24 "Finalize" complete finalize
 }
 
 run_repair() {
@@ -2316,7 +2513,8 @@ validate_target_installation() {
     echo "Installed sudo configuration failed validation." >&2
     return 1
   fi
-  echo "Installed fstab, kernel/initramfs, GRUB, required services, and sudo configuration validated."
+  validate_desktop_installation
+  echo "Installed boot files, services, sudo, and desktop configuration validated."
 }
 
 bootstrap_prepare() { bootstrap_system prepare; }
@@ -2359,12 +2557,13 @@ main() {
   run_step 15 "Install GRUB" bootloader-configured setup_grub
   run_step 16 "Enable services" services-enabled enable_services
   run_step 17 "Configure accounts" accounts-configured create_user
-  run_step 18 "Configure first-login dotfiles" chezmoi-hook-configured configure_chezmoi_first_login
-  run_step 19 "Apply chezmoi dotfiles" chezmoi-applied apply_chezmoi
-  run_step 20 "Install xbps wrappers" wrappers-installed install_wrappers
-  run_step 21 "Create initial snapshot" initial-snapshot initial_snapshot
-  run_step 22 "Validate installed system" validated validate_target_installation
-  run_step 23 "Finalize" complete finalize
+  run_step 18 "Configure desktop" desktop-configured configure_desktop
+  run_step 19 "Configure first-login dotfiles" chezmoi-hook-configured configure_chezmoi_first_login
+  run_step 20 "Apply chezmoi dotfiles" chezmoi-applied apply_chezmoi
+  run_step 21 "Install xbps wrappers" wrappers-installed install_wrappers
+  run_step 22 "Create initial snapshot" initial-snapshot initial_snapshot
+  run_step 23 "Validate installed system" validated validate_target_installation
+  run_step 24 "Finalize" complete finalize
 }
 
 main "$@"

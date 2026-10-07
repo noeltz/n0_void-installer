@@ -26,3 +26,9 @@ jobs:
           test -n "$start" -a -n "$end"
           sed -n "$((start+1)),$((end-1))p" install.sh > wrapper.sh
           shellcheck wrapper.sh
+
+      - name: Desktop, state and resume regression checks
+        run: |
+          python3 tests/desktop-regression.py
+          python3 tests/installer-state-regression.py
+          python3 tests/resume-repair-regression.py
