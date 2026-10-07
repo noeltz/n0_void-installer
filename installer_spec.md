@@ -37,6 +37,12 @@ decisions as each increment is released:
 - Before success, the installer verifies fstab UUID/mountpoint entries,
   matching kernel/initramfs files, GRUB configuration and EFI executable,
   required runit links, and sudo syntax.
+- GRUB installation must attempt the named `Void` EFI entry and install the
+  removable-media path at `EFI/BOOT/BOOTX64.EFI` on every fresh install. A
+  named-entry failure is a warning if fallback installation and validation
+  succeed. Detect Secure Boot from efivarfs before disk changes and stop when
+  it is enabled; unreadable state is reported as unknown, then checked through
+  the installed EFI files.
 
 ---
 

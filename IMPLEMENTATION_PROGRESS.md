@@ -8,8 +8,8 @@ continue from the last completed checkpoint.
 | Increment | Release | Status | Verification / next action |
 |---|---:|---|---|
 | 1. Cleanup ownership and disk safety | 1.3.4 | Verified locally; awaiting commit/push | `bash -n`, cleanup regression (owned-mount identity/order and early exits), account regression, signed XBPS bootstrap regression, and `git diff --check` pass. ShellCheck is unavailable locally; CI will run it. |
-| 2. Logs, final checks, checkpoint records | 1.3.5 | Verified locally; awaiting commit/push | Syntax, cleanup/state redaction regressions, account regression, help path, and diff checks pass. ShellCheck is unavailable locally; CI will run it. |
-| 3. EFI fallback boot | 1.3.6 | Pending | Verify named-entry and fallback paths, including OVMF boot without an NVRAM entry. |
+| 2. Logs, final checks, checkpoint records | 1.3.5 | Complete; pushed | Commit `f6eca17`; local syntax, cleanup/state redaction regressions, account regression, help, and diff checks passed. ShellCheck was unavailable locally. |
+| 3. EFI fallback boot | 1.3.6 | Verified locally; awaiting commit/push | Secure Boot status and named-entry/fallback command regressions pass. OVMF boot remains a user/VM acceptance check. |
 | 4. Cached repository probes | 1.3.7 | Pending | Extend signed local XBPS fixture to check one metadata sync and probe outcomes. |
 | 5. First-login chezmoi | 1.3.8 | Pending | Test tty/user gating, retries, concurrency, and the no-passwordless-sudo default. |
 | 6. Target Wi-Fi profile | 1.3.9 | Pending | Test keyfile parsing, permissions, input validation, and secret exclusion. |
@@ -45,4 +45,13 @@ continue from the last completed checkpoint.
   regression tests now pass. No product-code failure remains.
 - Increment 2 verification: `bash -n`, cleanup regression, state/log redaction
   regression, account regression, `--help`, and `git diff --check` pass.
-  ShellCheck is unavailable locally. Next: commit/push 1.3.5, then advance.
+  ShellCheck is unavailable locally.
+- Commit `f6eca17` pushed to `origin/main` as release 1.3.5.
+- Increment 3 changes: preflight detects enabled Secure Boot from efivarfs;
+  GRUB attempts the named entry, then always writes the removable fallback;
+  final validation requires `EFI/BOOT/BOOTX64.EFI`.
+- Increment 3 verification: `bash -n`, boot/cleanup/state regression tests,
+  and diff checks pass. No product-code failure remains. OVMF boot has not
+  been run in this workspace.
+- Current next action: commit/push release 1.3.6, then advance to repository
+  probe caching.

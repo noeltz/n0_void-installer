@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.5"
+INSTALLER_VERSION="1.3.6"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -445,6 +445,14 @@ preflight() {
     echo "Not booted in UEFI mode." >&2
     exit 3
   fi
+  local secureboot_status
+  secureboot_status=$(secure_boot_status)
+  if [[ $secureboot_status == enabled ]]; then
+    echo "Secure Boot is enabled. Disable Secure Boot in firmware; signed boot is not supported." >&2
+    exit 3
+  elif [[ $secureboot_status == unknown ]]; then
+    echo "Warning: Secure Boot state could not be read; boot compatibility will be checked after GRUB installation." >&2
+  fi
   # Check 6 uses only bash /dev/tcp: the live ISO ships no curl, and its xbps
   # may be too old for the current repositories (both verified on the ISO).
   local mirror_host=${MIRROR#https://}
@@ -487,6 +495,7 @@ preflight() {
   require_tool mkfs.vfat
   require_tool lsblk --version
   require_tool findmnt --version
+  require_tool od --version
   require_tool blkid --version
   require_tool wipefs --version
   require_tool udevadm --version
@@ -503,6 +512,24 @@ preflight() {
     fi
     require_tool dialog --version
   fi
+}
+
+secure_boot_status() {  # optional argument: efivarfs directory (for tests)
+  local efivars=${1:-/sys/firmware/efi/efivars} variable value
+  for variable in "$efivars"/SecureBoot-*; do
+    [[ -f $variable && -r $variable ]] || continue
+    if ! value=$(od -An -j4 -N1 -tu1 "$variable" 2>/dev/null | tr -d '[:space:]'); then
+      printf 'unknown\n'
+      return 0
+    fi
+    case $value in
+      1) printf 'enabled\n' ;;
+      0) printf 'disabled\n' ;;
+      *) printf 'unknown\n' ;;
+    esac
+    return 0
+  done
+  printf 'unknown\n'
 }
 
 # --------------------------------------------------------------------------
@@ -1309,12 +1336,21 @@ set_grub_default() {  # $1 = key, $2 = value
 }
 
 setup_grub() {
-  chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Void
+  install_grub_bootloaders
   chroot /mnt xbps-reconfigure -fa
   set_grub_default GRUB_CMDLINE_LINUX_DEFAULT "loglevel=4"
   set_grub_default GRUB_DISABLE_OS_PROBER "true"
   set_grub_default GRUB_TIMEOUT "3"
   chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+install_grub_bootloaders() {
+  local named_rc=0
+  chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Void || named_rc=$?
+  if (( named_rc != 0 )); then
+    echo "Warning: could not create the named UEFI boot entry; installing the EFI fallback path." >&2
+  fi
+  chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram
 }
 
 enable_sv() {  # $1 = service, $2 = fatal|optional
@@ -1611,6 +1647,10 @@ validate_target_installation() {
   fi
   if (( found_efi == 0 )); then
     echo "GRUB EFI executable is missing from the EFI partition." >&2
+    return 1
+  fi
+  if [[ ! -s /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI ]]; then
+    echo "EFI removable-media fallback executable is missing." >&2
     return 1
   fi
   for svc in "${SV_FATAL[@]}"; do

@@ -25,7 +25,7 @@ come from your dotfiles.
 ## Requirements
 
 - the **official Void Linux live ISO (glibc, x86_64)**, booted in **UEFI**
-  mode, with a working network connection
+  mode with Secure Boot disabled, and a working network connection
 - a target disk of **at least 20 GiB** — it will be **completely erased**
 - at least 1 GiB RAM
 
@@ -111,4 +111,5 @@ Cleanup and state regression tests run without a Void installation or root:
 ```sh
 python3 tests/cleanup-regression.py
 python3 tests/installer-state-regression.py
+python3 tests/boot-regression.py
 ```
