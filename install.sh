@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.3.6"
+INSTALLER_VERSION="1.3.7"
 BTRFS_OPTS="rw,noatime,compress=zstd:1,discard=async"
 MIN_DISK_BYTES=21474836480   # 20 GiB
 GRUB_BTRFS_OWN=0             # set by probe_packages when grub-btrfs-runit ships no service dir
@@ -26,6 +26,9 @@ INSTALLER_SUDOERS_CREATED=0
 INSTALLER_LOG=""
 INSTALL_STATE=""
 INSTALL_STATE_STEP=0
+PROBE_DIR=""
+PROBE_ROOT=""
+PROBE_CONF=""
 
 declare -A PKG_SEEN=()
 PKGS_ALL=()
@@ -474,16 +477,6 @@ preflight() {
     exit 3
   fi
 
-  # The repositories moved to a flat layout (/current/x86_64-repodata instead
-  # of /current/x86_64/x86_64-repodata) in October 2026; an xbps from before
-  # that change cannot read the new layout and every package would fail with
-  # "not found in repository pool". A canary query makes that fail here, with
-  # an actionable message, before anything else runs.
-  if ! xbps-query -R -M --repository="$MIRROR/current" base-system >/dev/null 2>&1; then
-    echo "Repository $MIRROR/current is not readable by this xbps (layout mismatch or mirror problem). Use a newer live ISO or another MIRROR." >&2
-    exit 3
-  fi
-
   # Host tools are NOT installed. The ISO's base-system ships everything the
   # installer executes on the host, and its set is internally consistent.
   # Installing current repo packages onto the old ISO userland instead
@@ -772,12 +765,25 @@ build_package_lists() {
 probe_packages() {
   local pkg svc
 
-  # Lightweight package availability check: one xbps-query per package
-  # (xbps-query accepts only a single package argument; batched call fails
-  # with "too many arguments"). Each call uses -M to fetch repodata into RAM.
+  PROBE_DIR=$(mktemp -d /tmp/void-installer-probe.XXXXXX)
+  PROBE_ROOT="$PROBE_DIR/root"
+  PROBE_CONF="$PROBE_DIR/conf"
+  mkdir -p "$PROBE_ROOT/var/db/xbps/keys" "$PROBE_CONF"
+  cp /var/db/xbps/keys/* "$PROBE_ROOT/var/db/xbps/keys/"
+  if ! XBPS_ARCH=x86_64 xbps-install -i -C "$PROBE_CONF" -r "$PROBE_ROOT" \
+      --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" -S -y; then
+    echo "Could not synchronize the isolated package-probe cache." >&2
+    exit 3
+  fi
+  if ! probe_query base-system >/dev/null 2>&1; then
+    echo "Repository $MIRROR/current is not readable by this xbps (layout mismatch or mirror problem). Use a newer live ISO or another MIRROR." >&2
+    exit 3
+  fi
+
+  # Query the synchronized isolated root without -M so XBPS reuses the local
+  # repodata rather than fetching it once per package.
   for pkg in "${PKGS_ALL[@]}"; do
-    if ! xbps-query -R -M --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" \
-         "$pkg" >/dev/null; then
+    if ! probe_query "$pkg" >/dev/null; then
       echo "Package not found in repository: $pkg" >&2
       exit 3
     fi
@@ -788,12 +794,10 @@ probe_packages() {
   if [[ $SWAP == zram ]]; then
     pairs+=(zramen:zramen)
   fi
-  # -M everywhere: repository queries would otherwise read the (possibly
-  # empty) on-disk cache instead of the live mirror.
   for svc in "${pairs[@]}"; do
     pkg=${svc%%:*}
     svc=${svc##*:}
-    if xbps-query -R -M --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"; then
+    if probe_query -f "$pkg" | grep -q "etc/sv/$svc"; then
       continue
     fi
     echo "Package $pkg does not provide service $svc." >&2
@@ -803,7 +807,7 @@ probe_packages() {
   # NetworkManager: ship our own runit service if the package does not
   # provide one (verified on some Void releases/repos where the service
   # directory is absent from the binary package).
-  if xbps-query -R -M --repository="$MIRROR/current" -f NetworkManager | grep -q "etc/sv/NetworkManager"; then
+  if probe_query -f NetworkManager | grep -q "etc/sv/NetworkManager"; then
     NETWORKMANAGER_OWN=0
   else
     NETWORKMANAGER_OWN=1
@@ -813,11 +817,26 @@ probe_packages() {
   # (grub-btrfs-runit is an empty transitional package). If neither ships a
   # grub-btrfs service directory we provide our own run script instead of
   # failing (spec 10.1).
-  if xbps-query -R -M --repository="$MIRROR/current" -f grub-btrfs | grep -q "etc/sv/grub-btrfs"; then
+  if probe_query -f grub-btrfs | grep -q "etc/sv/grub-btrfs"; then
     GRUB_BTRFS_OWN=0
   else
     GRUB_BTRFS_OWN=1
   fi
+  cleanup_probe_cache
+}
+
+probe_query() {
+  xbps-query -i -C "$PROBE_CONF" -r "$PROBE_ROOT" -R \
+    --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" "$@"
+}
+
+cleanup_probe_cache() {
+  if [[ -n $PROBE_DIR && -d $PROBE_DIR ]]; then
+    rm -rf -- "$PROBE_DIR"
+  fi
+  PROBE_DIR=""
+  PROBE_ROOT=""
+  PROBE_CONF=""
 }
 
 # --------------------------------------------------------------------------
@@ -1565,6 +1584,7 @@ finalize() {
 
 cleanup() {
   preserve_install_log || true
+  cleanup_probe_cache || true
   if (( INSTALLER_SUDOERS_CREATED == 1 )) && [[ -d /mnt/etc/sudoers.d ]]; then
     rm -f /mnt/etc/sudoers.d/99-installer 2>/dev/null || true
   fi

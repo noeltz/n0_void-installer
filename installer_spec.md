@@ -442,7 +442,8 @@ Global error behavior (function `cleanup`, installed as `trap cleanup EXIT` and 
 | 13 | `configure_system`, `setup_snapper`, `setup_grub`, `enable_services`, `create_user` | Sections 10.7–10.11 |
 | 14 | `apply_chezmoi` | Section 13 |
 | 15 | `install_wrappers`, `initial_snapshot` | Sections 12, 10.13 |
-| 16 | `finalize` | 10.14 |
+| 16 | `validate_target_installation` | Installed-system checks |
+| 17 | `finalize` | 10.14 |
 
 ### 10.1 Step 7 — package probe
 
@@ -450,27 +451,33 @@ Lightweight package-availability and service-file checks against the mirror.
 No dry-run installation is performed; the full transaction validation runs
 later against the disk-backed `/mnt` (step 11).
 
-**Package availability check.** One batched `xbps-query` with `-M` (memory-sync)
-fetches repodata into RAM and verifies every package in `PKGS_ALL` exists
-in the configured repositories:
+**Repository cache.** Synchronize the configured repositories once into a
+temporary root and configuration under `/tmp`, with the live ISO's trusted
+repository keys copied into the isolated root:
 
 ```bash
-xbps-query -R -M --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" \
-  "${PKGS_ALL[@]}"
+xbps-install -i -C "$PROBE_CONF" -r "$PROBE_ROOT" \
+  --repository="$MIRROR/current" --repository="$MIRROR/current/nonfree" -S -y
 ```
 
-Any missing or renamed package causes non-zero exit; stderr names the
-offending package(s). `rc != 0` → print `Package check failed (a package may be missing or renamed). See output above.` and exit 3. Nothing has been modified on the target disk at this point.
+The `base-system` canary and all package/service queries use this isolated
+on-disk cache without `-M`. XBPS must not install packages into the probe
+root. Service-file queries may fetch the corresponding binary package once
+because repository metadata does not contain its file list; this does not
+trigger another repository-index download. The cache is removed after probing
+or by exit cleanup on failure.
 
-**`-M` (memory-sync) is required**: repository queries would otherwise read
-the (possibly-empty) on-disk cache instead of the live mirror.
+**Package availability check.** `xbps-query` accepts one package per
+invocation, so iterate through `PKGS_ALL`, querying the already-synchronized
+cache. A missing/renamed package prints its name and exits 3. Nothing has been
+modified on the target disk at this point.
 
 **Service probe (same function, directly after the package probe).**
 
 For every (package, service) pair marked *fatal* in 10.10 that applies to this machine (except NetworkManager, which is handled separately), verify the package ships the service directory:
 
 ```bash
-xbps-query -R -M --repository="$MIRROR/current" -f "$pkg" | grep -q "etc/sv/$svc"
+probe_query -f "$pkg" | grep -q "etc/sv/$svc"
 ```
 
 Pairs (package → service): `dbus`→`dbus`, `elogind`→`elogind`, `polkit`→`polkitd`, `chrony`→`chronyd`, `acpid`→`acpid`, `zramen`→`zramen` (if `SWAP=zram`). A miss → print `Package <pkg> does not provide service <svc>.` and exit 3.

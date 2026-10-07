@@ -7,10 +7,10 @@ continue from the last completed checkpoint.
 
 | Increment | Release | Status | Verification / next action |
 |---|---:|---|---|
-| 1. Cleanup ownership and disk safety | 1.3.4 | Verified locally; awaiting commit/push | `bash -n`, cleanup regression (owned-mount identity/order and early exits), account regression, signed XBPS bootstrap regression, and `git diff --check` pass. ShellCheck is unavailable locally; CI will run it. |
+| 1. Cleanup ownership and disk safety | 1.3.4 | Complete; pushed | Commit `3c26b75`; cleanup and account regression checks passed. |
 | 2. Logs, final checks, checkpoint records | 1.3.5 | Complete; pushed | Commit `f6eca17`; local syntax, cleanup/state redaction regressions, account regression, help, and diff checks passed. ShellCheck was unavailable locally. |
-| 3. EFI fallback boot | 1.3.6 | Verified locally; awaiting commit/push | Secure Boot status and named-entry/fallback command regressions pass. OVMF boot remains a user/VM acceptance check. |
-| 4. Cached repository probes | 1.3.7 | Pending | Extend signed local XBPS fixture to check one metadata sync and probe outcomes. |
+| 3. EFI fallback boot | 1.3.6 | Complete; pushed | Commit `fefce60`; local Secure Boot and GRUB invocation regressions pass. OVMF boot remains a VM acceptance check. |
+| 4. Cached repository probes | 1.3.7 | Verified locally; awaiting commit/push | Signed local XBPS fixture confirms package/service outcomes and no repeat index downloads. |
 | 5. First-login chezmoi | 1.3.8 | Pending | Test tty/user gating, retries, concurrency, and the no-passwordless-sudo default. |
 | 6. Target Wi-Fi profile | 1.3.9 | Pending | Test keyfile parsing, permissions, input validation, and secret exclusion. |
 | 7. Resume and repair modes | 1.3.10 | Pending | Inject checkpoint failures and prove resume/repair cannot format or partition. |
@@ -53,5 +53,16 @@ continue from the last completed checkpoint.
 - Increment 3 verification: `bash -n`, boot/cleanup/state regression tests,
   and diff checks pass. No product-code failure remains. OVMF boot has not
   been run in this workspace.
-- Current next action: commit/push release 1.3.6, then advance to repository
-  probe caching.
+- Commit `fefce60` pushed to `origin/main` as release 1.3.6.
+- Increment 4 changes: package/service probes now use one temporary isolated
+  XBPS repository cache; the preflight canary shares the cache; cleanup removes
+  the cache on both success and failure. Target dependency planning remains on
+  the mounted target.
+- Increment 4 verification: signed XBPS repository regression passes. An
+  initial assertion treated the service-package archive request as a
+  metadata-cache miss; the test now tracks repodata requests separately and
+  confirms later queries do not refetch indexes. Service-file inspection can
+  still fetch the corresponding package archive. Syntax and related cleanup,
+  state, and boot regression checks pass; ShellCheck is unavailable locally.
+- Current next action: commit/push release 1.3.7, then implement first-login
+  chezmoi behavior.

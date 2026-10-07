@@ -19,6 +19,11 @@ that are mounted, read-only, or held by another block device, and only
 unmounts paths it mounted itself. Implementation and test progress is tracked
 in `IMPLEMENTATION_PROGRESS.md`.
 
+Package and service probes synchronize repository metadata once into a
+temporary isolated cache before disk changes. The installer removes that
+cache after probing and still performs full dependency and disk-space planning
+against the mounted target before package installation.
+
 No desktop environment or login manager is installed — that is expected to
 come from your dotfiles.
 
@@ -95,7 +100,8 @@ python3 tests/bootstrap-regression.py
 
 It serves a signed fixture repository on localhost and uses a temporary target
 to reproduce the `-n -S` failure and verify separate synchronization followed
-by a dry-run. It installs no packages and requires no root privileges.
+by a dry-run. It also confirms cached package/service queries do not refetch
+repository indexes. It installs no packages and requires no root privileges.
 
 The account regression test reproduces a PAM password update that returns
 success without setting a password, then checks that explicit SHA-512 updates
